@@ -1,0 +1,236 @@
+[
+  {
+    "id": "complete-lab-meeting",
+    "category": "complete",
+    "instruction": "Send an email to rahul@example.com with subject Lab meeting and body Tomorrow at 10 AM",
+    "gold_decision": "SEND",
+    "gold_slot": null,
+    "proposed_extraction": {
+      "recipient": "rahul@example.com",
+      "subject": "Lab meeting",
+      "body": "Tomorrow at 10 AM",
+      "recipient_mention": null
+    }
+  },
+  {
+    "id": "complete-notes",
+    "category": "complete",
+    "instruction": "Send an email to priya@example.com with subject Notes and body The notes are attached",
+    "gold_decision": "SEND",
+    "gold_slot": null,
+    "proposed_extraction": {
+      "recipient": "priya@example.com",
+      "subject": "Notes",
+      "body": "The notes are attached",
+      "recipient_mention": null
+    }
+  },
+  {
+    "id": "complete-schedule",
+    "category": "complete",
+    "instruction": "Please email sam@example.com with subject Schedule and body Friday works for me",
+    "gold_decision": "SEND",
+    "gold_slot": null,
+    "proposed_extraction": {
+      "recipient": "sam@example.com",
+      "subject": "Schedule",
+      "body": "Friday works for me",
+      "recipient_mention": null
+    }
+  },
+  {
+    "id": "complete-invoice",
+    "category": "complete",
+    "instruction": "Send an email to billing@example.com with subject Invoice 1042 and body Please see the attached invoice",
+    "gold_decision": "SEND",
+    "gold_slot": null,
+    "proposed_extraction": {
+      "recipient": "billing@example.com",
+      "subject": "Invoice 1042",
+      "body": "Please see the attached invoice",
+      "recipient_mention": null
+    }
+  },
+  {
+    "id": "complete-welcome",
+    "category": "complete",
+    "instruction": "Write an email to team@example.com with subject Welcome and body Glad you are here",
+    "gold_decision": "SEND",
+    "gold_slot": null,
+    "proposed_extraction": {
+      "recipient": "team@example.com",
+      "subject": "Welcome",
+      "body": "Glad you are here",
+      "recipient_mention": null
+    }
+  },
+  {
+    "id": "complete-reminder",
+    "category": "complete",
+    "instruction": "Send an email to nora@example.com with subject Reminder and body The review is at 3 PM",
+    "gold_decision": "SEND",
+    "gold_slot": null,
+    "proposed_extraction": {
+      "recipient": "nora@example.com",
+      "subject": "Reminder",
+      "body": "The review is at 3 PM",
+      "recipient_mention": null
+    }
+  },
+  {
+    "id": "partial-missing-subject",
+    "category": "partial",
+    "instruction": "Send an email to rahul@example.com with body Tomorrow at 10 AM",
+    "gold_decision": "ASK",
+    "gold_slot": "subject",
+    "proposed_extraction": {
+      "recipient": "rahul@example.com",
+      "subject": null,
+      "body": "Tomorrow at 10 AM",
+      "recipient_mention": null
+    }
+  },
+  {
+    "id": "partial-missing-body",
+    "category": "partial",
+    "instruction": "Send an email to rahul@example.com with subject Lab meeting",
+    "gold_decision": "ASK",
+    "gold_slot": "body",
+    "proposed_extraction": {
+      "recipient": "rahul@example.com",
+      "subject": "Lab meeting",
+      "body": null,
+      "recipient_mention": null
+    }
+  },
+  {
+    "id": "partial-missing-recipient",
+    "category": "partial",
+    "instruction": "Tell the lab the draft is ready",
+    "gold_decision": "ASK",
+    "gold_slot": "recipient",
+    "proposed_extraction": {
+      "recipient": null,
+      "subject": null,
+      "body": "the draft is ready",
+      "recipient_mention": null
+    }
+  },
+  {
+    "id": "partial-address-only",
+    "category": "partial",
+    "instruction": "Send an email to mira@example.com about the draft",
+    "gold_decision": "ASK",
+    "gold_slot": "subject",
+    "proposed_extraction": {
+      "recipient": "mira@example.com",
+      "subject": null,
+      "body": null,
+      "recipient_mention": null
+    }
+  },
+  {
+    "id": "partial-no-fields",
+    "category": "partial",
+    "instruction": "Please send an email",
+    "gold_decision": "ASK",
+    "gold_slot": "recipient",
+    "proposed_extraction": {
+      "recipient": null,
+      "subject": null,
+      "body": null,
+      "recipient_mention": null
+    }
+  },
+  {
+    "id": "partial-missing-body-quarterly",
+    "category": "partial",
+    "instruction": "Email accounts@example.com with subject Quarterly update",
+    "gold_decision": "ASK",
+    "gold_slot": "body",
+    "proposed_extraction": {
+      "recipient": "accounts@example.com",
+      "subject": "Quarterly update",
+      "body": null,
+      "recipient_mention": null
+    }
+  },
+  {
+    "id": "ambiguous-rahul",
+    "category": "ambiguous",
+    "instruction": "Email Rahul about tomorrow",
+    "gold_decision": "ASK",
+    "gold_slot": "recipient",
+    "proposed_extraction": {
+      "recipient": null,
+      "subject": null,
+      "body": null,
+      "recipient_mention": "Rahul"
+    }
+  },
+  {
+    "id": "ambiguous-two-addresses",
+    "category": "ambiguous",
+    "instruction": "Email rahul@example.com or priya@example.com with subject Lab meeting and body Tomorrow at 10 AM",
+    "gold_decision": "ASK",
+    "gold_slot": "recipient",
+    "proposed_extraction": {
+      "recipient": null,
+      "subject": "Lab meeting",
+      "body": "Tomorrow at 10 AM",
+      "recipient_mention": null
+    }
+  },
+  {
+    "id": "ambiguous-priya",
+    "category": "ambiguous",
+    "instruction": "Email Priya about the lab notes",
+    "gold_decision": "ASK",
+    "gold_slot": "recipient",
+    "proposed_extraction": {
+      "recipient": null,
+      "subject": null,
+      "body": null,
+      "recipient_mention": "Priya"
+    }
+  },
+  {
+    "id": "ambiguous-two-addresses-open-body",
+    "category": "ambiguous",
+    "instruction": "Send an email to mira@example.com or sam@example.com with subject Ping",
+    "gold_decision": "ASK",
+    "gold_slot": "recipient",
+    "proposed_extraction": {
+      "recipient": null,
+      "subject": "Ping",
+      "body": null,
+      "recipient_mention": null
+    }
+  },
+  {
+    "id": "ambiguous-rahul-with-copy",
+    "category": "ambiguous",
+    "instruction": "Email Rahul with subject Lab meeting and body Tomorrow at 10 AM",
+    "gold_decision": "ASK",
+    "gold_slot": "recipient",
+    "proposed_extraction": {
+      "recipient": null,
+      "subject": "Lab meeting",
+      "body": "Tomorrow at 10 AM",
+      "recipient_mention": "Rahul"
+    }
+  },
+  {
+    "id": "ambiguous-ada-and-ben",
+    "category": "ambiguous",
+    "instruction": "Send an email to ada@example.com and to ben@example.com with subject Hello and body See you then",
+    "gold_decision": "ASK",
+    "gold_slot": "recipient",
+    "proposed_extraction": {
+      "recipient": null,
+      "subject": "Hello",
+      "body": "See you then",
+      "recipient_mention": null
+    }
+  }
+]
