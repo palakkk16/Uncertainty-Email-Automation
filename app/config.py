@@ -1,12 +1,15 @@
-"""Bind settings and the optional Gemini free-tier configuration.
+"""Bind settings, the optional Gemini free-tier configuration, and dispatch.
 
 A missing GEMINI_API_KEY must not stop /health. POST /chat reports that
 as unavailable instead of inventing fields. The key is never logged.
+Dispatch is off unless APP_DISPATCH_ENABLED is true, and an enabled but
+unusable dispatch configuration stops startup.
 """
 
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +19,15 @@ from dotenv import load_dotenv
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8741
+
+# POST /chat is unauthenticated. Sending real mail is only allowed when the
+# server cannot be reached from another machine.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_PLACEHOLDER_SENDER = "your-sender@gmail.com"
+_ADDRESS_RE = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9._%+\-]*@[A-Za-z0-9][A-Za-z0-9.\-]*\.[A-Za-z]{2,}"
+)
+_BOOLEANS = {"true": True, "false": False}
 
 # Google AI Studio free tier (standard), confirmed on the Gemini API pricing
 # page. Not a Pro model and not a Vertex AI model id.
@@ -70,3 +82,82 @@ def _parse_port(port_raw: str) -> int:
     if port < 1 or port > 65535:
         raise ConfigError("APP_PORT must be an integer from 1 to 65535")
     return port
+
+
+@dataclass(frozen=True)
+class DispatchSettings:
+    """Gmail dispatch on SEND.
+
+    An empty allowed_recipients means any address the user wrote may be used.
+    Entries are lowercased.
+    """
+
+    sender: str
+    token_path: Path
+    allowed_recipients: frozenset[str]
+
+
+def load_dispatch_settings() -> DispatchSettings | None:
+    """Return None when dispatch is off. Refuse an enabled but unsafe setup.
+
+    The token file is not required here. It can expire or be created after
+    startup, so the sender checks it on each send.
+    """
+    host = load_settings().host
+    enabled = _parse_bool(
+        "APP_DISPATCH_ENABLED", os.environ.get("APP_DISPATCH_ENABLED", "false")
+    )
+    if not enabled:
+        return None
+    if host.lower() not in _LOOPBACK_HOSTS:
+        raise ConfigError(
+            "APP_DISPATCH_ENABLED requires APP_HOST to be 127.0.0.1, localhost, or ::1"
+        )
+    return DispatchSettings(
+        sender=_parse_sender(os.environ.get("GMAIL_SENDER", "")),
+        token_path=_parse_token_path(os.environ.get("TOKEN_PATH", "")),
+        allowed_recipients=_parse_allowlist(
+            os.environ.get("APP_DISPATCH_ALLOWED_RECIPIENTS", "")
+        ),
+    )
+
+
+def _parse_bool(name: str, raw: str) -> bool:
+    value = _BOOLEANS.get(raw.strip().lower())
+    if value is None:
+        raise ConfigError(f"{name} must be true or false")
+    return value
+
+
+def _parse_sender(raw: str) -> str:
+    sender = raw.strip()
+    if sender == _PLACEHOLDER_SENDER or not is_address(sender):
+        raise ConfigError(
+            "APP_DISPATCH_ENABLED requires GMAIL_SENDER to be your Gmail address"
+        )
+    return sender
+
+
+def _parse_token_path(raw: str) -> Path:
+    value = raw.strip()
+    if not value:
+        raise ConfigError("APP_DISPATCH_ENABLED requires TOKEN_PATH")
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return _PROJECT_ROOT / path
+
+
+def _parse_allowlist(raw: str) -> frozenset[str]:
+    entries = [item.strip().lower() for item in raw.split(",") if item.strip()]
+    invalid = [item for item in entries if not is_address(item)]
+    if invalid:
+        raise ConfigError(
+            "APP_DISPATCH_ALLOWED_RECIPIENTS must be comma-separated email addresses"
+        )
+    return frozenset(entries)
+
+
+def is_address(value: str) -> bool:
+    """True when value is exactly one email address and nothing else."""
+    return _ADDRESS_RE.fullmatch(value) is not None

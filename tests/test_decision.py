@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from app.decision import decide
+from app.decision import Draft, decide
 from app.schemas.chat import EmailExtraction
 
 _CLEAR = (
@@ -40,6 +40,22 @@ def test_should_send_when_recipient_subject_and_body_are_resolved() -> None:
     assert result.assessment.subject == "resolved"
     assert result.assessment.body == "resolved"
     assert result.assessment.resolved_fraction == 1.0
+    assert result.draft == Draft("rahul@example.com", "Lab meeting", "Tomorrow at 10 AM")
+
+
+def test_should_draft_only_the_bare_address_when_recipient_has_extra_text() -> None:
+    result = decide(
+        _CLEAR,
+        EmailExtraction(
+            recipient="to rahul@example.com",
+            subject="Lab meeting",
+            body="Tomorrow at 10 AM",
+        ),
+    )
+
+    assert result.decision == "SEND"
+    assert result.draft is not None
+    assert result.draft.recipient == "rahul@example.com"
 
 
 def test_should_ask_about_subject_when_subject_is_missing() -> None:
@@ -53,6 +69,7 @@ def test_should_ask_about_subject_when_subject_is_missing() -> None:
     )
 
     assert result.decision == "ASK"
+    assert result.draft is None
     assert result.clarification == result.reply
     assert "subject" in result.clarification.lower()
     assert "rahul@example.com" not in result.clarification

@@ -25,13 +25,23 @@ TextStatus = Literal["resolved", "missing"]
 
 
 @dataclass(frozen=True)
+class Draft:
+    """The resolved fields of a SEND. recipient is one bare address."""
+
+    recipient: str
+    subject: str
+    body: str
+
+
+@dataclass(frozen=True)
 class Decision:
-    """One threshold outcome. clarification is null only for SEND."""
+    """One threshold outcome. clarification is null and draft is set only for SEND."""
 
     decision: Literal["ASK", "SEND"]
     clarification: str | None
     reply: str
     assessment: SlotAssessment
+    draft: Draft | None = None
 
 
 def decide(instruction: str, extraction: EmailExtraction) -> Decision:
@@ -48,8 +58,17 @@ def decide(instruction: str, extraction: EmailExtraction) -> Decision:
     )
     question = _question(recipient, mention, addresses, subject, body)
     if question is None:
-        return Decision("SEND", None, _SEND_REPLY, assessment)
+        draft = _draft(addresses, extraction)
+        return Decision("SEND", None, _SEND_REPLY, assessment, draft)
     return Decision("ASK", question, question, assessment)
+
+
+def _draft(addresses: list[str], extraction: EmailExtraction) -> Draft:
+    """Every slot is resolved here, so a gap is a programmer error."""
+    subject, body = extraction.subject, extraction.body
+    if len(addresses) != 1 or subject is None or body is None:
+        raise RuntimeError("SEND requires one address, a subject, and a body")
+    return Draft(addresses[0], subject, body)
 
 
 def _recipient_slot(

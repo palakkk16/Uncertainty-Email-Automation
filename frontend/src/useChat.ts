@@ -5,7 +5,7 @@ import {
   exceedsMessageCap,
   stitchUserTurns,
 } from "./stitch.ts";
-import { assistantTurn } from "./turns.ts";
+import { assistantTurn, isDelivered } from "./turns.ts";
 import type { Turn } from "./types.ts";
 
 export const CAP_ERROR =
@@ -26,6 +26,8 @@ export function useChat() {
   );
   const pendingTurns = draft.trim() ? [...userTexts, draft] : userTexts;
   const pendingLength = stitchUserTurns(pendingTurns).length;
+  // Every check re-posts all user turns, so a delivered thread would send again.
+  const delivered = turns.some(isDelivered);
 
   function updateDraft(value: string) {
     setDraft(value);
@@ -38,8 +40,17 @@ export function useChat() {
     }
   }
 
+  function reset() {
+    if (busy.current) {
+      return;
+    }
+    setTurns([]);
+    setDraft("");
+    setError(null);
+  }
+
   async function submit() {
-    if (busy.current || loading) {
+    if (busy.current || loading || delivered) {
       return;
     }
     const text = draft.trim();
@@ -76,10 +87,12 @@ export function useChat() {
     draft,
     error,
     loading,
+    delivered,
     pendingLength,
     maxLength: MAX_MESSAGE_LENGTH,
     updateDraft,
     submit,
+    reset,
   };
 }
 

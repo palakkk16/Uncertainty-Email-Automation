@@ -1,5 +1,5 @@
 """Slot-sufficiency threshold. This package does not send mail."""
 
-from app.decision.sufficiency import decide
+from app.decision.sufficiency import Draft, decide
 
-__all__ = ["decide"]
+__all__ = ["Draft", "decide"]

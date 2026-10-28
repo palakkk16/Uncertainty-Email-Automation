@@ -5,6 +5,13 @@ export type EmailExtraction = {
   recipient_mention: string | null;
 };
 
+export type DispatchStatus = "sent" | "disabled" | "already_sent";
+
+export type DispatchResult = {
+  status: DispatchStatus;
+  message_id: string | null;
+};
+
 export type ChatResponse = {
   reply: string;
   phase: "decision_layer";
@@ -18,6 +25,7 @@ export type ChatResponse = {
     body: "resolved" | "missing";
     resolved_fraction: number;
   };
+  dispatch: DispatchResult | null;
 };
 
 export type UserTurn = {
@@ -37,6 +45,7 @@ export type SendTurn = {
   id: string;
   role: "assistant";
   decision: "SEND";
+  dispatch: DispatchStatus;
   sentence: string;
   extraction: EmailExtraction;
 };

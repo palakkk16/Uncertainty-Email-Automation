@@ -1,8 +1,9 @@
-import type { ChatResponse, EmailExtraction } from "./types.ts";
+import type { ChatResponse, DispatchResult, EmailExtraction } from "./types.ts";
 
 export type ChatFailureKind =
   | "rate_limit"
   | "extraction"
+  | "dispatch"
   | "network"
   | "rejected"
   | "unexpected";
@@ -24,13 +25,22 @@ const REJECTED =
   "That instruction was not accepted. Keep it between 1 and 4000 characters.";
 const UNEXPECTED = "The API returned an unexpected error. Try again.";
 
+// Keyed by the API's fixed `detail` text. Every one of these means no email left.
+const DISPATCH_ERRORS: Record<string, string> = {
+  "Email dispatch failed.": "The email was not sent. Gmail failed. Try again.",
+  "Email dispatch is unavailable.":
+    "The email was not sent. The server's Gmail sign-in needs attention.",
+  "Recipient is not on the dispatch allowlist.":
+    "The email was not sent. That recipient is not on the dispatch allowlist.",
+};
+
 export async function postChat(message: string): Promise<ChatResponse> {
   const response = await readResponse(message);
   if (response.status === 429) {
     throw new ChatRequestError("rate_limit", RATE_LIMIT);
   }
-  if (response.status === 502 || response.status === 503) {
-    throw new ChatRequestError("extraction", EXTRACTION);
+  if ([403, 502, 503].includes(response.status)) {
+    throw await serverError(response);
   }
   if (response.status === 422) {
     throw new ChatRequestError("rejected", REJECTED);
@@ -53,6 +63,28 @@ async function readResponse(message: string): Promise<Response> {
     });
   } catch {
     throw new ChatRequestError("network", NETWORK);
+  }
+}
+
+async function serverError(response: Response): Promise<ChatRequestError> {
+  const dispatch = DISPATCH_ERRORS[await readDetail(response)];
+  if (dispatch) {
+    return new ChatRequestError("dispatch", dispatch);
+  }
+  if (response.status === 403) {
+    return new ChatRequestError("unexpected", UNEXPECTED);
+  }
+  return new ChatRequestError("extraction", EXTRACTION);
+}
+
+async function readDetail(response: Response): Promise<string> {
+  try {
+    const payload: unknown = await response.json();
+    return isRecord(payload) && typeof payload.detail === "string"
+      ? payload.detail
+      : "";
+  } catch {
+    return "";
   }
 }
 
@@ -88,7 +120,23 @@ function isChatResponse(value: unknown): value is ChatResponse {
   if (!isExtraction(value.extraction) || !isAssessment(value.assessment)) {
     return false;
   }
-  return true;
+  // SEND must say whether mail left. ASK never dispatches.
+  if (value.decision === "SEND") {
+    return isDispatch(value.dispatch);
+  }
+  return value.dispatch === null;
+}
+
+function isDispatch(value: unknown): value is DispatchResult {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    (value.status === "sent" ||
+      value.status === "disabled" ||
+      value.status === "already_sent") &&
+    isNullableString(value.message_id)
+  );
 }
 
 function isExtraction(value: unknown): value is EmailExtraction {

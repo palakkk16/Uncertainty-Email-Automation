@@ -73,11 +73,26 @@ class SlotAssessment(BaseModel):
     resolved_fraction: float
 
 
+class DispatchResult(BaseModel):
+    """What happened to a SEND decision.
+
+    `disabled` means APP_DISPATCH_ENABLED is off and no email was sent.
+    `already_sent` means the same email went out recently and was not repeated.
+    `message_id` is the Gmail message id, set only for `sent`.
+    """
+
+    model_config = ConfigDict(strict=True)
+
+    status: Literal["sent", "disabled", "already_sent"]
+    message_id: str | None = None
+
+
 class ChatResponse(BaseModel):
     """ASK or SEND from the slot-sufficiency threshold.
 
     The language model does not choose `decision`. Python does, after
-    copy-only extraction. SEND does not send mail.
+    copy-only extraction. `dispatch` is null for ASK and reports whether a
+    SEND was actually delivered.
     """
 
     reply: str
@@ -86,3 +101,4 @@ class ChatResponse(BaseModel):
     clarification: str | None
     extraction: EmailExtraction
     assessment: SlotAssessment
+    dispatch: DispatchResult | None = None

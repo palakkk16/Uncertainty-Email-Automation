@@ -27,8 +27,8 @@ export default function App() {
         <header className="header">
           <h1>UNCERTAIN-EMAIL</h1>
           <p>
-            Ask until recipient, subject, and body are in your words. This
-            page does not send email.
+            Ask until recipient, subject, and body are in your words. Email
+            is sent only when the server has dispatch turned on.
           </p>
         </header>
         <MessageList turns={chat.turns} loading={chat.loading} />
@@ -37,29 +37,48 @@ export default function App() {
             {chat.error}
           </p>
         ) : null}
-        <form className="composer" onSubmit={onSubmit}>
-          <label htmlFor={inputId}>Email instruction</label>
-          <textarea
-            id={inputId}
-            name="instruction"
-            value={chat.draft}
-            placeholder="Who is it for, and what should it say?"
-            rows={3}
-            disabled={chat.loading}
-            aria-invalid={chat.error ? true : undefined}
-            aria-describedby={chat.error ? `${hintId} ${errorId}` : hintId}
-            onChange={(event) => chat.updateDraft(event.target.value)}
-            onKeyDown={onKeyDown}
-          />
-          <button type="submit" disabled={chat.loading || chat.draft.trim().length === 0}>
-            {chat.loading ? "Checking…" : "Check"}
-          </button>
-          <p id={hintId} className={overCap ? "meta over" : "meta"}>
-            Characters in the next check: {chat.pendingLength} / {chat.maxLength}.
-            Enter checks the instruction. Shift+Enter adds a line.
-          </p>
-        </form>
+        {chat.delivered ? (
+          <NewEmailBar onReset={chat.reset} />
+        ) : (
+          <form className="composer" onSubmit={onSubmit}>
+            <label htmlFor={inputId}>Email instruction</label>
+            <textarea
+              id={inputId}
+              name="instruction"
+              value={chat.draft}
+              placeholder="Who is it for, and what should it say?"
+              rows={3}
+              autoFocus
+              disabled={chat.loading}
+              aria-invalid={chat.error ? true : undefined}
+              aria-describedby={chat.error ? `${hintId} ${errorId}` : hintId}
+              onChange={(event) => chat.updateDraft(event.target.value)}
+              onKeyDown={onKeyDown}
+            />
+            <button type="submit" disabled={chat.loading || chat.draft.trim().length === 0}>
+              {chat.loading ? "Checking…" : "Check"}
+            </button>
+            <p id={hintId} className={overCap ? "meta over" : "meta"}>
+              Characters in the next check: {chat.pendingLength} / {chat.maxLength}.
+              Enter checks the instruction. Shift+Enter adds a line.
+            </p>
+          </form>
+        )}
       </main>
+    </div>
+  );
+}
+
+function NewEmailBar({ onReset }: { onReset: () => void }) {
+  return (
+    <div className="composer">
+      <p className="notice">
+        This email was delivered. Start a new email so this one is not sent
+        again.
+      </p>
+      <button type="button" onClick={onReset} autoFocus>
+        New email
+      </button>
     </div>
   );
 }

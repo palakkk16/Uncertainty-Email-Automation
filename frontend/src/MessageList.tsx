@@ -39,7 +39,8 @@ function EmptyState() {
   return (
     <p className="empty">
       Type an email instruction. If the recipient, subject, or body is
-      missing, you will be asked. Nothing is sent.
+      missing, you will be asked. Once all three are stated, the email is
+      sent only if the server has dispatch turned on.
     </p>
   );
 }
@@ -72,10 +73,17 @@ function AskBubble({ turn }: { turn: AskTurn }) {
   );
 }
 
+const SEND_HEADINGS: Record<SendTurn["dispatch"], { who: string; label: string }> = {
+  sent: { who: "Sent", label: "Email sent." },
+  already_sent: { who: "Already sent", label: "Email already sent. Not sent again." },
+  disabled: { who: "Decision", label: "Send decision. No email was sent." },
+};
+
 function SendCard({ turn }: { turn: SendTurn }) {
+  const heading = SEND_HEADINGS[turn.dispatch];
   return (
-    <article className="bubble send" aria-label="Send decision. No email was sent.">
-      <p className="who">Decision</p>
+    <article className="bubble send" aria-label={heading.label}>
+      <p className="who">{heading.who}</p>
       <p className="sentence">{turn.sentence}</p>
       <dl>
         <div>

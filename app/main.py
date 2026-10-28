@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from app.config import load_settings
+from app.config import load_dispatch_settings, load_settings
 from app.routers.chat import router as chat_router
 
 
@@ -23,18 +23,21 @@ def health() -> HealthResponse:
 def create_app() -> FastAPI:
     """Build the API.
 
-    Settings load here so a bad APP_PORT stops startup before any request
-    is served. A missing Gemini key does not stop startup; POST /chat
-    returns an error instead of guessing fields.
+    Settings load here so a bad APP_PORT or an enabled but unsafe dispatch
+    configuration stops startup before any request is served. A missing
+    Gemini key does not stop startup; POST /chat returns an error instead
+    of guessing fields.
     """
     load_settings()
+    load_dispatch_settings()
     application = FastAPI(
         title="UNCERTAIN-EMAIL",
-        version="0.4.0",
+        version="0.5.0",
         description=(
-            "Phase 4 copies email fields with one Gemini free-tier call, "
-            "then Python applies a slot-sufficiency threshold and returns "
-            "ASK or SEND. That decision does not send mail."
+            "Copies email fields with one Gemini free-tier call, then Python "
+            "applies a slot-sufficiency threshold and returns ASK or SEND. "
+            "A SEND is delivered through Gmail only when APP_DISPATCH_ENABLED "
+            "is true."
         ),
     )
     application.include_router(chat_router)
