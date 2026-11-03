@@ -77,6 +77,7 @@ const SEND_HEADINGS: Record<SendTurn["dispatch"], { who: string; label: string }
   sent: { who: "Sent", label: "Email sent." },
   already_sent: { who: "Already sent", label: "Email already sent. Not sent again." },
   disabled: { who: "Decision", label: "Send decision. No email was sent." },
+  rejected: { who: "Preview", label: "Send decision. Recipient is not on the allowlist. No email was sent." },
 };
 
 function SendCard({ turn }: { turn: SendTurn }) {

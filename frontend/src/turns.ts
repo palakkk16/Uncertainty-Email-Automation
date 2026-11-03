@@ -34,13 +34,13 @@ export function isDelivered(turn: Turn): turn is SendTurn {
   return (
     turn.role === "assistant" &&
     turn.decision === "SEND" &&
-    turn.dispatch !== "disabled"
+    (turn.dispatch === "sent" || turn.dispatch === "already_sent")
   );
 }
 
 function sendSentence(response: ChatResponse, dispatch: DispatchStatus): string {
   const reply = response.reply.trim();
-  if (dispatch === "disabled") {
+  if (dispatch === "disabled" || dispatch === "rejected") {
     return withNoSendSentence(reply);
   }
   if (reply.length > 0) {

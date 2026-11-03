@@ -5,7 +5,7 @@ export type EmailExtraction = {
   recipient_mention: string | null;
 };
 
-export type DispatchStatus = "sent" | "disabled" | "already_sent";
+export type DispatchStatus = "sent" | "disabled" | "already_sent" | "rejected";
 
 export type DispatchResult = {
   status: DispatchStatus;

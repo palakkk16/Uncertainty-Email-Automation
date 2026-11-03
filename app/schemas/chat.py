@@ -77,13 +77,15 @@ class DispatchResult(BaseModel):
     """What happened to a SEND decision.
 
     `disabled` means APP_DISPATCH_ENABLED is off and no email was sent.
+    `rejected` means the recipient is not on the allowlist; the draft is
+    returned as a preview and no email was sent.
     `already_sent` means the same email went out recently and was not repeated.
     `message_id` is the Gmail message id, set only for `sent`.
     """
 
     model_config = ConfigDict(strict=True)
 
-    status: Literal["sent", "disabled", "already_sent"]
+    status: Literal["sent", "disabled", "already_sent", "rejected"]
     message_id: str | None = None
 
 

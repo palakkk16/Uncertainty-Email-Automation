@@ -134,7 +134,8 @@ function isDispatch(value: unknown): value is DispatchResult {
   return (
     (value.status === "sent" ||
       value.status === "disabled" ||
-      value.status === "already_sent") &&
+      value.status === "already_sent" ||
+      value.status === "rejected") &&
     isNullableString(value.message_id)
   );
 }

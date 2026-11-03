@@ -26,6 +26,7 @@ from app.extraction.gemini import (
     ExtractionUnavailable,
     extract_email_fields,
 )
+from app.extraction.heuristic import apply_followup_slots
 from app.schemas.chat import ChatRequest, ChatResponse, DispatchResult, EmailExtraction
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ def chat(
     dispatcher: Annotated[Dispatcher | None, Depends(get_dispatcher)],
 ) -> ChatResponse:
     """Extract stated fields, choose ASK or SEND in Python, then dispatch a SEND."""
-    fields = _extract(body.message)
+    fields = apply_followup_slots(body.message, _extract(body.message))
     outcome = decide(body.message, fields)
     dispatch = None
     if outcome.draft is not None:
@@ -83,17 +84,17 @@ def _extract(message: str) -> EmailExtraction:
 
 
 def _dispatch(dispatcher: Dispatcher | None, draft: Draft) -> DispatchResult:
-    """Map dispatch failures to fixed HTTP details. Never log the draft."""
+    """Deliver a SEND, or return a preview when dispatch is off or rejected.
+
+    Unavailable or failed Gmail still maps to HTTP. Never log the draft.
+    """
     if dispatcher is None:
         return DispatchResult(status="disabled")
     try:
         return dispatcher.dispatch(draft)
     except DispatchRejected as exc:
-        _log_reason(exc)
-        raise HTTPException(
-            status_code=403,
-            detail="Recipient is not on the dispatch allowlist.",
-        ) from exc
+        logger.warning("dispatch error: %s (%s); returning SEND preview", type(exc).__name__, exc)
+        return DispatchResult(status="rejected")
     except DispatchUnavailable as exc:
         _log_reason(exc)
         raise HTTPException(
@@ -109,8 +110,15 @@ def _dispatch(dispatcher: Dispatcher | None, draft: Draft) -> DispatchResult:
 
 
 def _reply(outcome: Decision, dispatch: DispatchResult | None) -> str:
-    if dispatch is None or outcome.draft is None or dispatch.status == "disabled":
+    if dispatch is None or outcome.draft is None:
         return outcome.reply
+    if dispatch.status == "disabled":
+        return outcome.reply
+    if dispatch.status == "rejected":
+        return (
+            "The decision is SEND. No email was sent. "
+            "That recipient is not on the dispatch allowlist."
+        )
     recipient = outcome.draft.recipient
     if dispatch.status == "already_sent":
         return f"This email was already sent to {recipient}. It was not sent again."

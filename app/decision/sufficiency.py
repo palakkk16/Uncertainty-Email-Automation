@@ -103,6 +103,9 @@ def _bare_mention(instruction: str, extraction: EmailExtraction) -> str | None:
 
 
 def _text_slot(value: str | None, instruction: str) -> TextStatus:
+    """Resolved when the user provided a non-empty string that occurs in the instruction."""
+    if not isinstance(value, str) or not value.strip():
+        return "missing"
     if occurs_in(value, instruction):
         return "resolved"
     return "missing"

@@ -46,6 +46,8 @@ _DISPATCH_ENV = (
     "GMAIL_SENDER",
     "TOKEN_PATH",
     "APP_DISPATCH_ALLOWED_RECIPIENTS",
+    "DISPATCH_ALLOWLIST",
+    "ALLOWED_RECIPIENTS",
 )
 
 
@@ -75,6 +77,21 @@ def test_should_load_settings_when_dispatch_is_enabled(env: pytest.MonkeyPatch) 
     assert settings.sender == "me@example.com"
     assert settings.token_path == Path(__file__).resolve().parents[1] / "credentials/token.json"
     assert settings.allowed_recipients == {"rahul@example.com", "priya@example.com"}
+
+
+def test_should_merge_dispatch_allowlist_aliases(env: pytest.MonkeyPatch) -> None:
+    env.setenv("APP_DISPATCH_ALLOWED_RECIPIENTS", "rahul@example.com")
+    env.setenv("DISPATCH_ALLOWLIST", "priya@example.com")
+    env.setenv("ALLOWED_RECIPIENTS", "palakpunjabi10d7583@gmail.com")
+
+    settings = load_dispatch_settings()
+
+    assert settings is not None
+    assert settings.allowed_recipients == {
+        "rahul@example.com",
+        "priya@example.com",
+        "palakpunjabi10d7583@gmail.com",
+    }
 
 
 @pytest.mark.parametrize(

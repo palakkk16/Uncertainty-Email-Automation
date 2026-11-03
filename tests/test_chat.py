@@ -55,7 +55,10 @@ def gemini_payload() -> dict[str, object]:
         "calls": 0,
         "constructed": 0,
         "error": None,
+        "errors": {},
         "model": None,
+        "list_calls": 0,
+        "listed_models": [],
     }
 
 
@@ -71,10 +74,22 @@ def _patch_gemini_client(
             gemini_payload["calls"] = int(gemini_payload["calls"]) + 1
             gemini_payload["model"] = model
             gemini_payload["contents"] = contents
+            errors = gemini_payload["errors"]
+            if isinstance(errors, dict) and model in errors:
+                raise errors.pop(model)
             error = gemini_payload["error"]
             if error is not None:
                 raise error
             return SimpleNamespace(text=gemini_payload["text"])
+
+        def list(self, *, config: object = None):
+            gemini_payload["list_calls"] = int(gemini_payload["list_calls"]) + 1
+            names = gemini_payload["listed_models"]
+            assert isinstance(names, list)
+            return [
+                SimpleNamespace(name=name, supported_actions=["generateContent"])
+                for name in names
+            ]
 
     class _Client:
         def __init__(self, *, api_key: str) -> None:
@@ -161,7 +176,46 @@ def test_should_dispatch_once_with_the_draft_when_decision_is_send(
     assert gemini_payload["calls"] == 1
     assert gemini_payload["model"] == DEFAULT_GEMINI_MODEL
     assert "pro" not in str(gemini_payload["model"])
+    assert gemini_payload["list_calls"] == 0
     _assert_gmail_not_loaded()
+
+
+def test_should_fall_back_when_the_configured_model_returns_404(
+    gemini_payload: dict[str, object],
+    mail: FakeSender,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gemini_payload["text"] = _FULL_JSON
+    gemini_payload["listed_models"] = ["models/gemini-3.8-flash"]
+    gemini_payload["errors"] = {
+        "gemini-2.5-flash": ClientError(
+            404,
+            {
+                "error": {
+                    "message": "This model models/gemini-2.5-flash is no longer available.",
+                    "status": "NOT_FOUND",
+                }
+            },
+        )
+    }
+    monkeypatch.setattr(
+        "app.extraction.gemini.load_settings",
+        lambda: Settings(
+            host="127.0.0.1",
+            port=8741,
+            gemini_api_key="test-not-a-real-key",
+            gemini_model="gemini-2.5-flash",
+        ),
+    )
+
+    response = client.post("/chat", json={"message": _CLEAR})
+
+    assert response.status_code == 200
+    assert response.json()["decision"] == "SEND"
+    assert response.json()["extraction"]["recipient"] == "rahul@example.com"
+    assert gemini_payload["model"] == "gemini-3.8-flash"
+    assert gemini_payload["list_calls"] == 1
+    assert mail.calls == [("rahul@example.com", "Lab meeting", "Tomorrow at 10 AM")]
 
 
 def test_should_not_dispatch_when_app_dispatch_enabled_is_false(
@@ -196,7 +250,7 @@ def test_should_not_send_again_when_the_same_send_is_posted_twice(
     assert len(mail.calls) == 1
 
 
-def test_should_return_403_when_recipient_is_not_on_the_allowlist(
+def test_should_return_send_preview_when_recipient_is_not_on_the_allowlist(
     gemini_payload: dict[str, object],
     mail: FakeSender,
     guard: DuplicateGuard,
@@ -205,8 +259,15 @@ def test_should_return_403_when_recipient_is_not_on_the_allowlist(
 
     response = _post_clear(gemini_payload)
 
-    assert response.status_code == 403
-    assert response.json() == {"detail": "Recipient is not on the dispatch allowlist."}
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"] == "SEND"
+    assert body["dispatch"] == {"status": "rejected", "message_id": None}
+    assert body["extraction"]["recipient"] == "rahul@example.com"
+    assert body["extraction"]["subject"] == "Lab meeting"
+    assert body["extraction"]["body"] == "Tomorrow at 10 AM"
+    assert "allowlist" in body["reply"].lower()
+    assert "No email was sent." in body["reply"]
     assert mail.calls == []
 
 
@@ -276,6 +337,36 @@ def test_should_allow_a_retry_when_the_previous_send_failed(
     assert retried.status_code == 200
     assert retried.json()["dispatch"] == {"status": "sent", "message_id": "fake-id-2"}
     assert len(mail.calls) == 2
+
+
+def test_chat_followup_subject_is_resolved_and_does_not_ask_again(
+    gemini_payload: dict[str, object],
+    mail: FakeSender,
+) -> None:
+    message = (
+        "Send mail to palak for leave approval\n"
+        "palakpunjabi10d7583@gmail.com\n"
+        "leave approval"
+    )
+    gemini_payload["text"] = json.dumps(
+        {
+            "recipient": "palakpunjabi10d7583@gmail.com",
+            "subject": None,
+            "body": None,
+            "recipient_mention": "palak",
+        }
+    )
+
+    response = client.post("/chat", json={"message": message})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["extraction"]["subject"] == "leave approval"
+    assert body["assessment"]["subject"] == "resolved"
+    assert body["decision"] == "SEND"
+    assert body["clarification"] is None
+    assert mail.calls[0][0] == "palakpunjabi10d7583@gmail.com"
+    assert mail.calls[0][1] == "leave approval"
 
 
 def test_chat_bare_name_asks_for_that_person(
@@ -353,7 +444,7 @@ def test_chat_invalid_json_is_502_and_does_not_send(
     _assert_gmail_not_loaded()
 
 
-def test_chat_gemini_429_is_http_429_and_does_not_send(
+def test_chat_gemini_429_falls_back_to_local_extraction_and_does_not_send(
     gemini_payload: dict[str, object],
     mail: FakeSender,
 ) -> None:
@@ -372,12 +463,13 @@ def test_chat_gemini_429_is_http_429_and_does_not_send(
 
     response = client.post("/chat", json={"message": _CLEAR})
 
-    assert response.status_code == 429
-    assert response.json() == {"detail": "Gemini rate limit."}
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"] == "ASK"
+    assert body["extraction"]["recipient"] == "rahul@example.com"
     assert "AIza-secret" not in response.text
     assert "generativelanguage" not in response.text
     assert "RESOURCE_EXHAUSTED" not in response.text
-    assert response.json().get("decision") != "SEND"
     assert mail.calls == []
     _assert_gmail_not_loaded()
 

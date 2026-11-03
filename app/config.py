@@ -15,6 +15,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+
 # Repo root, so `.env` is found when uvicorn is started from another cwd.
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_HOST = "127.0.0.1"
@@ -31,7 +33,7 @@ _BOOLEANS = {"true": True, "false": False}
 
 # Google AI Studio free tier (standard), confirmed on the Gemini API pricing
 # page. Not a Pro model and not a Vertex AI model id.
-DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODEL: str = DEFAULT_GEMINI_MODEL
 
 
 class ConfigError(Exception):
@@ -116,9 +118,7 @@ def load_dispatch_settings() -> DispatchSettings | None:
     return DispatchSettings(
         sender=_parse_sender(os.environ.get("GMAIL_SENDER", "")),
         token_path=_parse_token_path(os.environ.get("TOKEN_PATH", "")),
-        allowed_recipients=_parse_allowlist(
-            os.environ.get("APP_DISPATCH_ALLOWED_RECIPIENTS", "")
-        ),
+        allowed_recipients=_load_allowed_recipients(),
     )
 
 
@@ -146,6 +146,18 @@ def _parse_token_path(raw: str) -> Path:
     if path.is_absolute():
         return path
     return _PROJECT_ROOT / path
+
+
+def _load_allowed_recipients() -> frozenset[str]:
+    """Union APP_DISPATCH_ALLOWED_RECIPIENTS with DISPATCH_ALLOWLIST aliases."""
+    combined = ",".join(
+        (
+            os.environ.get("APP_DISPATCH_ALLOWED_RECIPIENTS", ""),
+            os.environ.get("DISPATCH_ALLOWLIST", ""),
+            os.environ.get("ALLOWED_RECIPIENTS", ""),
+        )
+    )
+    return _parse_allowlist(combined)
 
 
 def _parse_allowlist(raw: str) -> frozenset[str]:

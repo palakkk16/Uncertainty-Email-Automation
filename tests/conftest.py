@@ -19,6 +19,8 @@ import pytest
 if not os.environ.get("GEMINI_API_KEY", "").strip():
     os.environ["GEMINI_API_KEY"] = "test-not-a-real-key"
 os.environ["APP_DISPATCH_ENABLED"] = "false"
+# Pin the model so a retired id in a developer's .env cannot reach the suite.
+os.environ["GEMINI_MODEL"] = "gemini-3.8-flash"
 
 
 def _refuse_network(*_args: object, **_kwargs: object) -> None:
