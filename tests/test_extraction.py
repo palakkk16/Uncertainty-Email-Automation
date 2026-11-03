@@ -16,7 +16,7 @@ from app.extraction.gemini import (
     parse_extraction,
     pick_flash_model,
 )
-from app.extraction.heuristic import apply_followup_slots
+from app.extraction.heuristic import apply_followup_slots, compose_missing_body
 from app.schemas.chat import EmailExtraction
 
 _CLEAR = (
@@ -254,7 +254,8 @@ def test_local_regex_extract_copies_address_name_and_quoted_fields() -> None:
     assert addressed.recipient == "palak@example.com"
     assert addressed.recipient_mention is None
     assert addressed.subject == "Hi"
-    assert addressed.body is None
+    assert addressed.body is not None
+    assert "Dear" in addressed.body
 
 
 def test_local_regex_extract_uses_for_phrase_and_followup_line_as_subject() -> None:
@@ -278,6 +279,63 @@ def test_local_regex_extract_uses_for_phrase_and_followup_line_as_subject() -> N
         EmailExtraction(recipient="palakpunjabi10d7583@gmail.com"),
     )
     assert merged.subject == "leave approval"
+
+
+def test_should_compose_a_professional_body_when_intent_is_clear() -> None:
+    result = local_regex_extract("send mail to hitu@example.com for leave approval")
+
+    assert result.recipient == "hitu@example.com"
+    assert result.subject == "leave approval"
+    assert result.body is not None
+    assert "Dear Hitu" in result.body
+    assert "leave" in result.body.lower()
+    assert "Best regards" in result.body
+
+
+def test_should_keep_a_stated_body_instead_of_composing() -> None:
+    result = local_regex_extract(
+        "Email hitu@example.com with subject 'Leave' and body \"Out tomorrow\""
+    )
+
+    assert result.subject == "Leave"
+    assert result.body == "Out tomorrow"
+
+
+def test_compose_missing_body_is_idempotent_when_body_already_exists() -> None:
+    fields = EmailExtraction(
+        recipient="hitu@example.com",
+        subject="leave approval",
+        body="Out tomorrow",
+    )
+
+    filled = compose_missing_body(
+        "send mail to hitu@example.com for leave approval",
+        fields,
+    )
+
+    assert filled.body == "Out tomorrow"
+
+
+def test_should_compose_body_after_copy_only_gemini_when_intent_is_present(
+    gemini: dict[str, object],
+) -> None:
+    instruction = "send mail to hitu@example.com for leave approval"
+    gemini["text"] = json.dumps(
+        {
+            "recipient": "hitu@example.com",
+            "subject": None,
+            "body": None,
+            "recipient_mention": None,
+        }
+    )
+
+    result = extract_email_fields(instruction)
+
+    assert result.recipient == "hitu@example.com"
+    assert result.subject == "leave approval"
+    assert result.body is not None
+    assert "Dear Hitu" in result.body
+    assert "leave" in result.body.lower()
 
 
 def test_should_not_put_provider_text_on_extraction_error(gemini: dict[str, object]) -> None:

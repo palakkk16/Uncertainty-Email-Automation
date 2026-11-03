@@ -91,7 +91,8 @@ class DispatchSettings:
     """Gmail dispatch on SEND.
 
     An empty allowed_recipients means any address the user wrote may be used.
-    Entries are lowercased.
+    APP_ALLOW_ALL_RECIPIENTS=true (default) forces that empty set so a demo
+    can send to any valid address. Entries are lowercased.
     """
 
     sender: str
@@ -149,7 +150,13 @@ def _parse_token_path(raw: str) -> Path:
 
 
 def _load_allowed_recipients() -> frozenset[str]:
-    """Union APP_DISPATCH_ALLOWED_RECIPIENTS with DISPATCH_ALLOWLIST aliases."""
+    """Union APP_DISPATCH_ALLOWED_RECIPIENTS with DISPATCH_ALLOWLIST aliases.
+
+    APP_ALLOW_ALL_RECIPIENTS (alias ALLOW_ALL_RECIPIENTS) defaults to true so
+    dispatch is not limited to a named list. Set it false to enforce the list.
+    """
+    if _allow_all_recipients():
+        return frozenset()
     combined = ",".join(
         (
             os.environ.get("APP_DISPATCH_ALLOWED_RECIPIENTS", ""),
@@ -158,6 +165,13 @@ def _load_allowed_recipients() -> frozenset[str]:
         )
     )
     return _parse_allowlist(combined)
+
+
+def _allow_all_recipients() -> bool:
+    raw = os.environ.get("APP_ALLOW_ALL_RECIPIENTS")
+    if raw is None or not raw.strip():
+        raw = os.environ.get("ALLOW_ALL_RECIPIENTS", "true")
+    return _parse_bool("APP_ALLOW_ALL_RECIPIENTS", raw)
 
 
 def _parse_allowlist(raw: str) -> frozenset[str]:

@@ -271,6 +271,22 @@ def test_should_return_send_preview_when_recipient_is_not_on_the_allowlist(
     assert mail.calls == []
 
 
+def test_should_send_to_any_address_when_dispatcher_allowlist_is_empty(
+    gemini_payload: dict[str, object],
+    mail: FakeSender,
+    guard: DuplicateGuard,
+) -> None:
+    _use_dispatcher(Dispatcher(mail, frozenset(), guard))
+
+    response = _post_clear(gemini_payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"] == "SEND"
+    assert body["dispatch"]["status"] == "sent"
+    assert mail.calls == [("rahul@example.com", "Lab meeting", "Tomorrow at 10 AM")]
+
+
 def test_should_send_when_recipient_matches_the_allowlist_in_another_case(
     gemini_payload: dict[str, object],
     mail: FakeSender,
@@ -337,6 +353,36 @@ def test_should_allow_a_retry_when_the_previous_send_failed(
     assert retried.status_code == 200
     assert retried.json()["dispatch"] == {"status": "sent", "message_id": "fake-id-2"}
     assert len(mail.calls) == 2
+
+
+def test_should_send_preview_without_asking_for_body_when_intent_is_clear(
+    gemini_payload: dict[str, object],
+    mail: FakeSender,
+) -> None:
+    message = "send mail to hitu@example.com for leave approval"
+    gemini_payload["text"] = json.dumps(
+        {
+            "recipient": "hitu@example.com",
+            "subject": None,
+            "body": None,
+            "recipient_mention": "hitu",
+        }
+    )
+
+    response = client.post("/chat", json={"message": message})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"] == "SEND"
+    assert body["clarification"] is None
+    assert body["assessment"]["body"] == "resolved"
+    assert body["extraction"]["subject"] == "leave approval"
+    assert body["extraction"]["body"] is not None
+    assert "Dear Hitu" in body["extraction"]["body"]
+    assert "leave" in body["extraction"]["body"].lower()
+    assert mail.calls[0][0] == "hitu@example.com"
+    assert mail.calls[0][1] == "leave approval"
+    assert mail.calls[0][2] == body["extraction"]["body"]
 
 
 def test_chat_followup_subject_is_resolved_and_does_not_ask_again(

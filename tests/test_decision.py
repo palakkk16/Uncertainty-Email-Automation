@@ -97,6 +97,34 @@ def test_should_ask_about_body_when_body_is_missing() -> None:
     assert result.assessment.resolved_fraction == pytest.approx(2 / 3)
 
 
+def test_should_send_when_body_was_generated_and_is_not_in_the_instruction() -> None:
+    generated = (
+        "Dear Hitu,\n\n"
+        "I am writing to request approval for leave. "
+        "Please let me know if any further details are required.\n\n"
+        "Best regards,"
+    )
+    result = decide(
+        "send mail to hitu@example.com for leave approval",
+        EmailExtraction(
+            recipient="hitu@example.com",
+            subject="leave approval",
+            body=generated,
+        ),
+    )
+
+    assert result.decision == "SEND"
+    assert result.clarification is None
+    assert result.assessment.body == "resolved"
+    assert result.assessment.subject == "resolved"
+    assert result.assessment.resolved_fraction == 1.0
+    assert result.draft == Draft(
+        "hitu@example.com",
+        "leave approval",
+        generated,
+    )
+
+
 def test_should_ask_for_rahul_address_when_instruction_names_him_without_email() -> None:
     result = decide(
         _RAHUL,

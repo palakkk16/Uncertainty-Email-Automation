@@ -23,7 +23,11 @@ class MailSender(Protocol):
 
 
 class Dispatcher:
-    """Allowlist check, duplicate guard, then one send."""
+    """Allowlist check, duplicate guard, then one send.
+
+    An empty allowed_recipients set skips the allowlist. That is how
+    APP_ALLOW_ALL_RECIPIENTS delivers to any address the user provided.
+    """
 
     def __init__(
         self,

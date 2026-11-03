@@ -48,7 +48,7 @@ def decide(instruction: str, extraction: EmailExtraction) -> Decision:
     """Choose ASK or SEND from slot constraints. Do not send mail."""
     recipient, mention, addresses = _recipient_slot(instruction, extraction)
     subject = _text_slot(extraction.subject, instruction)
-    body = _text_slot(extraction.body, instruction)
+    body = _text_slot(extraction.body, instruction, must_occur=False)
     assessment = SlotAssessment(
         method="slot_sufficiency_threshold",
         recipient=recipient,
@@ -102,11 +102,20 @@ def _bare_mention(instruction: str, extraction: EmailExtraction) -> str | None:
     return span_mention(instruction)
 
 
-def _text_slot(value: str | None, instruction: str) -> TextStatus:
-    """Resolved when the user provided a non-empty string that occurs in the instruction."""
+def _text_slot(
+    value: str | None,
+    instruction: str,
+    *,
+    must_occur: bool = True,
+) -> TextStatus:
+    """Resolved when the slot has non-empty text.
+
+    Subject must still occur in the instruction. Body may be an auto-drafted
+    message that does not appear in the user's words.
+    """
     if not isinstance(value, str) or not value.strip():
         return "missing"
-    if occurs_in(value, instruction):
+    if not must_occur or occurs_in(value, instruction):
         return "resolved"
     return "missing"
 

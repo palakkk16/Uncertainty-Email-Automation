@@ -48,6 +48,8 @@ _DISPATCH_ENV = (
     "APP_DISPATCH_ALLOWED_RECIPIENTS",
     "DISPATCH_ALLOWLIST",
     "ALLOWED_RECIPIENTS",
+    "APP_ALLOW_ALL_RECIPIENTS",
+    "ALLOW_ALL_RECIPIENTS",
 )
 
 
@@ -58,6 +60,7 @@ def env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     for name in _DISPATCH_ENV:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("APP_DISPATCH_ENABLED", "true")
+    monkeypatch.setenv("APP_ALLOW_ALL_RECIPIENTS", "false")
     monkeypatch.setenv("GMAIL_SENDER", "me@example.com")
     monkeypatch.setenv("TOKEN_PATH", "credentials/token.json")
     return monkeypatch
@@ -92,6 +95,42 @@ def test_should_merge_dispatch_allowlist_aliases(env: pytest.MonkeyPatch) -> Non
         "priya@example.com",
         "palakpunjabi10d7583@gmail.com",
     }
+
+
+def test_should_allow_any_recipient_by_default_when_the_flag_is_unset(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.delenv("APP_ALLOW_ALL_RECIPIENTS", raising=False)
+    env.delenv("ALLOW_ALL_RECIPIENTS", raising=False)
+    env.setenv("APP_DISPATCH_ALLOWED_RECIPIENTS", "priya@example.com")
+
+    settings = load_dispatch_settings()
+
+    assert settings is not None
+    assert settings.allowed_recipients == frozenset()
+
+
+def test_should_ignore_the_allowlist_when_allow_all_recipients_is_true(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("APP_ALLOW_ALL_RECIPIENTS", "true")
+    env.setenv("APP_DISPATCH_ALLOWED_RECIPIENTS", "priya@example.com")
+
+    settings = load_dispatch_settings()
+
+    assert settings is not None
+    assert settings.allowed_recipients == frozenset()
+
+
+def test_should_honor_allow_all_recipients_alias(env: pytest.MonkeyPatch) -> None:
+    env.delenv("APP_ALLOW_ALL_RECIPIENTS", raising=False)
+    env.setenv("ALLOW_ALL_RECIPIENTS", "true")
+    env.setenv("APP_DISPATCH_ALLOWED_RECIPIENTS", "priya@example.com")
+
+    settings = load_dispatch_settings()
+
+    assert settings is not None
+    assert settings.allowed_recipients == frozenset()
 
 
 @pytest.mark.parametrize(

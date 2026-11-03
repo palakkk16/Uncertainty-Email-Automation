@@ -18,7 +18,11 @@ from google.genai import errors, types
 from pydantic import ValidationError
 
 from app.config import DEFAULT_GEMINI_MODEL, load_settings
-from app.extraction.heuristic import apply_followup_slots, local_regex_extract
+from app.extraction.heuristic import (
+    apply_followup_slots,
+    compose_missing_body,
+    local_regex_extract,
+)
 from app.extraction.mentions import copied_mention
 from app.schemas.chat import EmailExtraction
 
@@ -71,6 +75,8 @@ def extract_email_fields(instruction: str, model_name: str | None = None) -> Ema
 
     Persistent 429/500/502/503 errors fall back to local regex copy so the
     chat route still receives EmailExtraction instead of HTTP 429 or 502.
+    After copy-only parse, a missing body is drafted when subject or intent
+    is already present so the user is not asked to type the message.
     """
     settings = load_settings()
     if not settings.gemini_api_key:
@@ -92,7 +98,8 @@ def extract_email_fields(instruction: str, model_name: str | None = None) -> Ema
             raise
         logger.warning("Gemini API unavailable; falling back to local heuristic extraction")
         return local_regex_extract(instruction)
-    return apply_followup_slots(instruction, fields)
+    copied = apply_followup_slots(instruction, fields)
+    return compose_missing_body(instruction, copied)
 
 
 def parse_extraction(raw: str, instruction: str) -> EmailExtraction:

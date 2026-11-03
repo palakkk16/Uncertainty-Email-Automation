@@ -86,7 +86,9 @@ def _extract(message: str) -> EmailExtraction:
 def _dispatch(dispatcher: Dispatcher | None, draft: Draft) -> DispatchResult:
     """Deliver a SEND, or return a preview when dispatch is off or rejected.
 
-    Unavailable or failed Gmail still maps to HTTP. Never log the draft.
+    APP_ALLOW_ALL_RECIPIENTS leaves the dispatcher allowlist empty, so any
+    valid address the user provided is delivered. Unavailable or failed
+    Gmail still maps to HTTP. Never log the draft.
     """
     if dispatcher is None:
         return DispatchResult(status="disabled")

@@ -1,4 +1,9 @@
-"""Best-effort field copy when Gemini is unavailable. Does not invent text."""
+"""Best-effort field copy when Gemini is unavailable.
+
+Recipient and subject stay copy-only. A missing body is drafted only when
+the instruction already states a subject or an explicit intent such as
+leave approval.
+"""
 
 from __future__ import annotations
 
@@ -40,6 +45,21 @@ def local_regex_extract(instruction: str) -> EmailExtraction:
     return apply_followup_slots(instruction, fields)
 
 
+def compose_missing_body(instruction: str, fields: EmailExtraction) -> EmailExtraction:
+    """Draft a professional body when the user stated a subject or intent."""
+    if _has_text(fields.body):
+        return fields
+    subject = fields.subject or _for_subject(instruction)
+    if not _has_text(subject):
+        return fields
+    return EmailExtraction(
+        recipient=fields.recipient,
+        recipient_mention=fields.recipient_mention,
+        subject=subject,
+        body=_professional_body(subject, fields, instruction),
+    )
+
+
 def apply_followup_slots(instruction: str, fields: EmailExtraction) -> EmailExtraction:
     """Fill the next open text slot from the latest user line when it is a short answer.
 
@@ -54,14 +74,14 @@ def apply_followup_slots(instruction: str, fields: EmailExtraction) -> EmailExtr
             subject = last
         elif body is None:
             body = last
-    if subject == fields.subject and body == fields.body:
-        return fields
-    return EmailExtraction(
-        recipient=fields.recipient,
-        recipient_mention=fields.recipient_mention,
-        subject=subject,
-        body=body,
-    )
+    if subject != fields.subject or body != fields.body:
+        fields = EmailExtraction(
+            recipient=fields.recipient,
+            recipient_mention=fields.recipient_mention,
+            subject=subject,
+            body=body,
+        )
+    return compose_missing_body(instruction, fields)
 
 
 def _quoted_parts(instruction: str) -> list[str]:
@@ -99,3 +119,35 @@ def _is_slot_answer(text: str) -> bool:
     if not text or _COMMAND_RE.search(text) or len(text) > 200:
         return False
     return 1 <= len(text.split()) <= 20
+
+
+def _professional_body(
+    subject: str, fields: EmailExtraction, instruction: str
+) -> str:
+    name = _addressee(fields, instruction)
+    purpose = _purpose_sentence(subject)
+    return (
+        f"Dear {name},\n\n"
+        f"{purpose} Please let me know if any further details are required.\n\n"
+        "Best regards,"
+    )
+
+
+def _addressee(fields: EmailExtraction, instruction: str) -> str:
+    mention = fields.recipient_mention or span_mention(instruction)
+    if mention:
+        return mention.split()[0].capitalize()
+    local = (fields.recipient or "").split("@", 1)[0]
+    if local.isalpha():
+        return local.capitalize()
+    return "there"
+
+
+def _purpose_sentence(subject: str) -> str:
+    if "leave" in subject.lower():
+        return "I am writing to request approval for leave."
+    return f"I am writing regarding {subject.strip()}."
+
+
+def _has_text(value: str | None) -> bool:
+    return isinstance(value, str) and bool(value.strip())
