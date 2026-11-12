@@ -47,9 +47,8 @@ _PREFERRED_FLASH = (
     "gemini-1.5-flash",
 )
 _PREFERRED_LITE = (
-    "gemini-2.5-flash-lite",
-    "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
     "gemini-flash-lite-latest",
 )
 _BUSY_FLASH = frozenset({"gemini-3.8-flash", "gemini-flash-latest"})
@@ -73,8 +72,8 @@ class ExtractionRateLimited(ExtractionError):
 def extract_email_fields(instruction: str, model_name: str | None = None) -> EmailExtraction:
     """Run one free-tier Gemini call and keep only text the user wrote.
 
-    Persistent 429/500/502/503 errors fall back to local regex copy so the
-    chat route still receives EmailExtraction instead of HTTP 429 or 502.
+    Persistent 404/429/500/502/503 errors fall back to local regex copy so
+    the chat route still receives EmailExtraction instead of HTTP 429 or 502.
     After copy-only parse, a missing body is drafted when subject or intent
     is already present so the user is not asked to type the message.
     """
@@ -92,6 +91,11 @@ def extract_email_fields(instruction: str, model_name: str | None = None) -> Ema
         if _is_rate_failure(exc):
             logger.warning(
                 "Gemini API rate limited (429); falling back to local heuristic extraction"
+            )
+            return local_regex_extract(instruction)
+        if _is_not_found_failure(exc):
+            logger.warning(
+                "Gemini model not found (404); falling back to local heuristic extraction"
             )
             return local_regex_extract(instruction)
         if not _is_capacity_failure(exc):
@@ -334,6 +338,14 @@ def _is_not_found(exc: BaseException) -> bool:
     if code is not None:
         return code == 404
     return getattr(exc, "status", None) in {404, "NOT_FOUND"}
+
+
+def _is_not_found_failure(exc: BaseException) -> bool:
+    """True for HTTP 404, including ExtractionError wrapping that code."""
+    if _is_not_found(exc):
+        return True
+    cause = exc.__cause__
+    return cause is not None and cause is not exc and _is_not_found_failure(cause)
 
 
 def _log_failure(model: str, exc: BaseException) -> None:

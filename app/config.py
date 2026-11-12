@@ -8,6 +8,7 @@ unusable dispatch configuration stops startup.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -187,3 +188,70 @@ def _parse_allowlist(raw: str) -> frozenset[str]:
 def is_address(value: str) -> bool:
     """True when value is exactly one email address and nothing else."""
     return _ADDRESS_RE.fullmatch(value) is not None
+
+
+@dataclass(frozen=True)
+class DispatchPublicStatus:
+    """Safe-to-display dispatch flags. No addresses, keys, or token paths."""
+
+    enabled: bool
+    allow_all_recipients: bool
+    mode: str
+
+
+def load_dispatch_public_status() -> DispatchPublicStatus:
+    """Describe dispatch for the telemetry page. Does not send mail."""
+    load_settings()
+    enabled = _parse_bool(
+        "APP_DISPATCH_ENABLED", os.environ.get("APP_DISPATCH_ENABLED", "false")
+    )
+    allow_all = _allow_all_recipients()
+    if not enabled:
+        mode = "Preview only (dispatch off)"
+    elif allow_all:
+        mode = "Live Gmail OAuth / Wildcard Demo Mode"
+    else:
+        mode = "Live Gmail OAuth"
+    return DispatchPublicStatus(
+        enabled=enabled,
+        allow_all_recipients=allow_all,
+        mode=mode,
+    )
+
+
+def load_google_client_id() -> str | None:
+    """OAuth web/installed client id for GIS. Never returns a client secret."""
+    load_settings()
+    for name in (
+        "APP_GOOGLE_CLIENT_ID",
+        "GOOGLE_CLIENT_ID",
+        "VITE_GOOGLE_CLIENT_ID",
+    ):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return _client_id_from_credentials()
+
+
+def _client_id_from_credentials() -> str | None:
+    raw = (
+        os.environ.get("CREDENTIALS_PATH", "").strip()
+        or os.environ.get("CLIENT_SECRET_PATH", "").strip()
+        or "credentials/credentials.json"
+    )
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = _PROJECT_ROOT / path
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    for block in payload.values():
+        if not isinstance(block, dict):
+            continue
+        client_id = block.get("client_id")
+        if isinstance(client_id, str) and client_id.strip():
+            return client_id.strip()
+    return None

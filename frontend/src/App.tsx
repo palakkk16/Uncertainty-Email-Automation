@@ -1,84 +1,76 @@
-import { useId, type FormEvent, type KeyboardEvent } from "react";
-import { MessageList } from "./MessageList.tsx";
+import { useEffect, useState } from "react";
+import { AppShell, type AppView } from "./AppShell.tsx";
+import { AuditLogView } from "./AuditLogView.tsx";
+import { ComposeView } from "./ComposeView.tsx";
+import { LoginPage } from "./LoginPage.tsx";
+import { cancelGooglePrompt, disableGoogleAutoSelect } from "./google.ts";
+import { clearSession, readSession, type Session } from "./session.ts";
+import { clearThread } from "./thread.ts";
 import { useChat } from "./useChat.ts";
 
 export default function App() {
-  const chat = useChat();
-  const inputId = useId();
-  const errorId = useId();
-  const hintId = useId();
-  const overCap = chat.pendingLength > chat.maxLength;
+  const [session, setSession] = useState<Session | null>(readSession);
 
-  function onSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    void chat.submit();
+  function onSignOut() {
+    disableGoogleAutoSelect();
+    cancelGooglePrompt();
+    clearSession();
+    clearThread();
+    setSession(null);
+    window.location.hash = "";
   }
 
-  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      event.currentTarget.form?.requestSubmit();
-    }
+  function onEnter(next: Session) {
+    setSession((current) => current ?? next);
+  }
+
+  if (session === null) {
+    return <LoginPage onEnter={onEnter} />;
+  }
+
+  return <Workspace session={session} onSignOut={onSignOut} />;
+}
+
+function Workspace({
+  session,
+  onSignOut,
+}: {
+  session: Session;
+  onSignOut: () => void;
+}) {
+  const chat = useChat();
+  const [view, setView] = useState<AppView>(readView);
+
+  useEffect(() => {
+    cancelGooglePrompt();
+  }, []);
+
+  function onView(next: AppView) {
+    setView(next);
+    window.location.hash = next;
   }
 
   return (
-    <div className="app">
-      <main className="sheet">
-        <header className="header">
-          <h1>UNCERTAIN-EMAIL</h1>
-          <p>
-            Ask until recipient, subject, and body are in your words. Email
-            is sent only when the server has dispatch turned on.
-          </p>
-        </header>
-        <MessageList turns={chat.turns} loading={chat.loading} />
-        {chat.error ? (
-          <p className="error" id={errorId} role="alert">
-            {chat.error}
-          </p>
-        ) : null}
-        {chat.delivered ? (
-          <NewEmailBar onReset={chat.reset} />
-        ) : (
-          <form className="composer" onSubmit={onSubmit}>
-            <label htmlFor={inputId}>Email instruction</label>
-            <textarea
-              id={inputId}
-              name="instruction"
-              value={chat.draft}
-              placeholder="Who is it for, and what should it say?"
-              rows={3}
-              autoFocus
-              disabled={chat.loading}
-              aria-invalid={chat.error ? true : undefined}
-              aria-describedby={chat.error ? `${hintId} ${errorId}` : hintId}
-              onChange={(event) => chat.updateDraft(event.target.value)}
-              onKeyDown={onKeyDown}
-            />
-            <button type="submit" disabled={chat.loading || chat.draft.trim().length === 0}>
-              {chat.loading ? "Checking…" : "Check"}
-            </button>
-            <p id={hintId} className={overCap ? "meta over" : "meta"}>
-              Characters in the next check: {chat.pendingLength} / {chat.maxLength}.
-              Enter checks the instruction. Shift+Enter adds a line.
-            </p>
-          </form>
-        )}
-      </main>
-    </div>
+    <AppShell
+      view={view}
+      session={session}
+      onView={onView}
+      onSignOut={onSignOut}
+    >
+      <div className="shell-pane" hidden={view !== "compose"}>
+        <ComposeView chat={chat} active={view === "compose"} />
+      </div>
+      <div className="shell-pane" hidden={view !== "audit"}>
+        <AuditLogView />
+      </div>
+    </AppShell>
   );
 }
 
-function NewEmailBar({ onReset }: { onReset: () => void }) {
-  return (
-    <div className="composer">
-      <p className="notice">
-        This email was delivered. Start a new email so this one is not sent
-        again.
-      </p>
-      <button type="button" onClick={onReset} autoFocus>
-        New email
-      </button>
-    </div>
-  );
+function readView(): AppView {
+  const hash = window.location.hash.replace("#", "");
+  if (hash === "audit" || hash === "compose") {
+    return hash;
+  }
+  return "compose";
 }

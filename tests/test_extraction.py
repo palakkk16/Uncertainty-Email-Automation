@@ -10,7 +10,6 @@ from google.genai.errors import ClientError
 
 from app.config import DEFAULT_GEMINI_MODEL, Settings
 from app.extraction.gemini import (
-    ExtractionError,
     extract_email_fields,
     local_regex_extract,
     parse_extraction,
@@ -57,7 +56,7 @@ def gemini(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         "listed": [
             "models/gemini-3.8-flash",
             "models/gemini-flash-latest",
-            "models/gemini-2.5-flash-lite",
+            "models/gemini-3.5-flash-lite",
             "models/gemini-2.5-flash",
         ],
         "errors": {},
@@ -185,7 +184,7 @@ def test_should_fall_back_to_a_lite_flash_model_after_503_retries(
     assert gemini["calls"] == [
         DEFAULT_GEMINI_MODEL,
         DEFAULT_GEMINI_MODEL,
-        "gemini-2.5-flash-lite",
+        "gemini-3.5-flash-lite",
     ]
     assert gemini["list_calls"] == 1
     assert gemini["sleeps"] == [0.5]
@@ -217,7 +216,7 @@ def test_should_use_local_regex_when_every_model_returns_503(
 ) -> None:
     gemini["fail_times"] = {
         DEFAULT_GEMINI_MODEL: 2,
-        "gemini-2.5-flash-lite": 2,
+        "gemini-3.5-flash-lite": 2,
     }
 
     with caplog.at_level("WARNING"):
@@ -231,8 +230,33 @@ def test_should_use_local_regex_when_every_model_returns_503(
     assert gemini["calls"] == [
         DEFAULT_GEMINI_MODEL,
         DEFAULT_GEMINI_MODEL,
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-flash-lite",
+        "gemini-3.5-flash-lite",
+        "gemini-3.5-flash-lite",
+    ]
+
+
+def test_should_use_local_regex_when_lite_fallback_returns_404(
+    gemini: dict[str, object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    gemini["fail_times"] = {DEFAULT_GEMINI_MODEL: 2}
+    gemini["errors"] = {
+        "gemini-3.5-flash-lite": _client_error(
+            404,
+            "This model models/gemini-2.5-flash-lite is no longer available to new users.",
+        )
+    }
+
+    with caplog.at_level("WARNING"):
+        result = extract_email_fields(_CLEAR)
+
+    assert isinstance(result, EmailExtraction)
+    assert result.recipient == "rahul@example.com"
+    assert "falling back to local heuristic extraction" in caplog.text
+    assert gemini["calls"] == [
+        DEFAULT_GEMINI_MODEL,
+        DEFAULT_GEMINI_MODEL,
+        "gemini-3.5-flash-lite",
     ]
 
 
@@ -338,16 +362,24 @@ def test_should_compose_body_after_copy_only_gemini_when_intent_is_present(
     assert "leave" in result.body.lower()
 
 
-def test_should_not_put_provider_text_on_extraction_error(gemini: dict[str, object]) -> None:
+def test_should_use_local_regex_when_every_model_returns_404(
+    gemini: dict[str, object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     gemini["errors"] = {
-        DEFAULT_GEMINI_MODEL: _client_error(404, "https://generativelanguage.googleapis.com?key=AIza-secret")
+        DEFAULT_GEMINI_MODEL: _client_error(
+            404, "https://generativelanguage.googleapis.com?key=AIza-secret"
+        )
     }
     gemini["listed"] = []
 
-    with pytest.raises(ExtractionError) as info:
-        extract_email_fields(_CLEAR)
-    assert "AIza-secret" not in str(info.value)
-    assert "generativelanguage" not in str(info.value)
+    with caplog.at_level("WARNING"):
+        result = extract_email_fields(_CLEAR)
+
+    assert isinstance(result, EmailExtraction)
+    assert result.recipient == "rahul@example.com"
+    assert "AIza-secret" not in caplog.text
+    assert "falling back to local heuristic extraction" in caplog.text
 
 
 def test_parse_extraction_drops_text_the_instruction_does_not_contain() -> None:
@@ -382,11 +414,11 @@ def test_pick_flash_model_prefers_lite_when_standard_flash_is_busy() -> None:
     listed = [
         SimpleNamespace(name="models/gemini-flash-latest", supported_actions=["generateContent"]),
         SimpleNamespace(name="models/gemini-3.8-flash", supported_actions=["generateContent"]),
-        SimpleNamespace(name="models/gemini-2.5-flash-lite", supported_actions=["generateContent"]),
+        SimpleNamespace(name="models/gemini-3.5-flash-lite", supported_actions=["generateContent"]),
         SimpleNamespace(name="models/gemini-2.5-flash", supported_actions=["generateContent"]),
     ]
 
     assert (
         pick_flash_model(listed, failed="gemini-3.8-flash", prefer_lite=True)
-        == "gemini-2.5-flash-lite"
+        == "gemini-3.5-flash-lite"
     )

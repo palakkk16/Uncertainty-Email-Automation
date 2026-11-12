@@ -3,21 +3,11 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
-from pydantic import BaseModel
 
 from app.config import load_dispatch_settings, load_settings
+from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
-
-
-class HealthResponse(BaseModel):
-    """Liveness payload. This process does not check Gmail or a model."""
-
-    status: str
-
-
-def health() -> HealthResponse:
-    """Report that the process is up. Nothing else is probed."""
-    return HealthResponse(status="ok")
+from app.routers.health import router as health_router
 
 
 def create_app() -> FastAPI:
@@ -41,12 +31,8 @@ def create_app() -> FastAPI:
         ),
     )
     application.include_router(chat_router)
-    application.add_api_route(
-        "/health",
-        health,
-        methods=["GET"],
-        response_model=HealthResponse,
-    )
+    application.include_router(health_router)
+    application.include_router(auth_router)
     return application
 
 

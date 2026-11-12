@@ -1,10 +1,12 @@
 import { useRef, useState } from "react";
 import { ChatRequestError, postChat } from "./api.ts";
+import { recordSendCard } from "./auditLog.ts";
 import {
   MAX_MESSAGE_LENGTH,
   exceedsMessageCap,
   stitchUserTurns,
 } from "./stitch.ts";
+import { clearThread, maxTurnId, readThread, writeThread } from "./thread.ts";
 import { assistantTurn, isDelivered } from "./turns.ts";
 import type { Turn } from "./types.ts";
 
@@ -14,11 +16,12 @@ export const CAP_ERROR =
 const NETWORK = "Cannot reach the API.";
 
 export function useChat() {
-  const [turns, setTurns] = useState<Turn[]>([]);
-  const [draft, setDraft] = useState("");
+  const initial = useRef(readThread());
+  const [turns, setTurns] = useState<Turn[]>(initial.current.turns);
+  const [draft, setDraft] = useState(initial.current.draft);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const ids = useRef(0);
+  const ids = useRef(maxTurnId(initial.current.turns));
   const busy = useRef(false);
 
   const userTexts = turns.flatMap((turn) =>
@@ -31,6 +34,7 @@ export function useChat() {
 
   function updateDraft(value: string) {
     setDraft(value);
+    writeThread(turns, value);
     if (exceedsMessageCap([...userTexts, value])) {
       setError(CAP_ERROR);
       return;
@@ -44,6 +48,7 @@ export function useChat() {
     if (busy.current) {
       return;
     }
+    clearThread();
     setTurns([]);
     setDraft("");
     setError(null);
@@ -68,11 +73,17 @@ export function useChat() {
       const response = await postChat(stitchUserTurns([...userTexts, text]));
       const userId = nextId(ids);
       const assistantId = nextId(ids);
-      setTurns((current) => [
-        ...current,
+      const assistant = assistantTurn(response, assistantId);
+      const next: Turn[] = [
+        ...turns,
         { id: userId, role: "user", text },
-        assistantTurn(response, assistantId),
-      ]);
+        assistant,
+      ];
+      if (assistant.role === "assistant" && assistant.decision === "SEND") {
+        recordSendCard(turns, assistant);
+      }
+      writeThread(next, "");
+      setTurns(next);
       setDraft("");
     } catch (err) {
       setError(err instanceof ChatRequestError ? err.message : NETWORK);
@@ -95,6 +106,8 @@ export function useChat() {
     reset,
   };
 }
+
+export type ChatController = ReturnType<typeof useChat>;
 
 function nextId(ids: { current: number }): string {
   ids.current += 1;

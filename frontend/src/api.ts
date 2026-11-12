@@ -1,3 +1,4 @@
+import { readSession, type Session } from "./session.ts";
 import type { ChatResponse, DispatchResult, EmailExtraction } from "./types.ts";
 
 export type ChatFailureKind =
@@ -168,4 +169,59 @@ function isNullableString(value: unknown): value is string | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+const AUTH_REJECTED = "Google sign-in was not accepted.";
+const AUTH_UNCONFIGURED = "Google sign-in is not configured.";
+
+export async function verifyGoogleCredential(credential: string): Promise<Session> {
+  const existing = readSession();
+  if (existing) {
+    return existing;
+  }
+  let response: Response;
+  try {
+    response = await fetch("/auth/google", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ credential }),
+    });
+  } catch {
+    throw new ChatRequestError("network", NETWORK);
+  }
+  if (response.status === 401) {
+    throw new ChatRequestError("rejected", AUTH_REJECTED);
+  }
+  if (response.status === 503) {
+    throw new ChatRequestError("unexpected", AUTH_UNCONFIGURED);
+  }
+  if (!response.ok) {
+    throw new ChatRequestError("unexpected", UNEXPECTED);
+  }
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new ChatRequestError("unexpected", UNEXPECTED);
+  }
+  if (!isGoogleProfile(payload)) {
+    throw new ChatRequestError("unexpected", UNEXPECTED);
+  }
+  return payload;
+}
+
+function isGoogleProfile(value: unknown): value is Session {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.name === "string" &&
+    value.name.length > 0 &&
+    typeof value.email === "string" &&
+    value.email.includes("@") &&
+    typeof value.picture === "string"
+  );
 }

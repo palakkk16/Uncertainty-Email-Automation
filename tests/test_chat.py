@@ -151,6 +151,32 @@ def test_health_returns_ok(gemini_payload: dict[str, object]) -> None:
     assert gemini_payload["calls"] == 0
 
 
+def test_health_config_reports_guardrails_without_secrets(
+    gemini_payload: dict[str, object],
+) -> None:
+    response = client.get("/health/config")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {
+        "extraction_engine",
+        "dispatch_enabled",
+        "allow_all_recipients",
+        "dispatch_mode",
+        "uncertainty_policy",
+    }
+    assert body["extraction_engine"] == "Gemini + Local Heuristic Fallback"
+    assert body["dispatch_enabled"] is False
+    assert body["allow_all_recipients"] is False
+    assert "preview" in body["dispatch_mode"].lower()
+    assert "Ask on missing recipient" in body["uncertainty_policy"]
+    dumped = str(body)
+    assert "GEMINI_API_KEY" not in dumped
+    assert "token.json" not in dumped
+    assert "AIza" not in dumped
+    assert gemini_payload["calls"] == 0
+
+
 def test_should_dispatch_once_with_the_draft_when_decision_is_send(
     gemini_payload: dict[str, object],
     mail: FakeSender,
