@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ChatRequestError, verifyGoogleCredential } from "./api.ts";
+import { EmailAuthForm, type AuthMode } from "./EmailAuthForm.tsx";
 import {
   cancelGooglePrompt,
   googleClientId,
@@ -15,9 +16,9 @@ type LoginPageProps = {
 
 export function LoginPage({ onEnter }: LoginPageProps) {
   const slot = useRef<HTMLDivElement>(null);
-  const onEnterRef = useRef(onEnter);
-  const [error, setError] = useState<string | null>(null);
-  onEnterRef.current = onEnter;
+  const enterRef = useRef<(session: Session) => void>(onEnter);
+  const [mode, setMode] = useState<AuthMode>("signin");
+  const [gisError, setGisError] = useState<string | null>(null);
 
   useEffect(() => {
     if (readSession()) {
@@ -25,7 +26,7 @@ export function LoginPage({ onEnter }: LoginPageProps) {
     }
     const clientId = googleClientId();
     if (!clientId) {
-      setError("Google sign-in is not configured.");
+      setGisError("Google sign-in is not configured.");
       return;
     }
     let cancelled = false;
@@ -44,7 +45,7 @@ export function LoginPage({ onEnter }: LoginPageProps) {
             if (cancelled || !isGoogleSignInActive()) {
               return;
             }
-            void acceptCredential(response.credential, onEnterRef.current, setError);
+            void acceptGoogleCredential(response.credential, enterRef.current, setGisError);
           },
         });
         google.accounts.id.renderButton(slot.current, {
@@ -57,7 +58,7 @@ export function LoginPage({ onEnter }: LoginPageProps) {
       })
       .catch(() => {
         if (!cancelled) {
-          setError("Google sign-in could not be loaded.");
+          setGisError("Google sign-in could not be loaded.");
         }
       });
     return () => {
@@ -66,31 +67,77 @@ export function LoginPage({ onEnter }: LoginPageProps) {
     };
   }, []);
 
+  function enterWorkspace(session: Session) {
+    writeSession(session);
+    setGoogleSignInActive(false);
+    cancelGooglePrompt();
+    onEnter(session);
+  }
+  enterRef.current = enterWorkspace;
+
   return (
-    <div className="login-page">
-      <main className="login-card">
+    <div className="auth-shell">
+      <section className="auth-showcase" aria-label="Product">
         <p className="login-kicker">UNCERTAIN-EMAIL</p>
-        <h1>Uncertainty-Aware Email Automation</h1>
-        <p className="login-lead">
-          Sign in with Google to open the workspace. Ask until the
-          instruction is complete. Send only when the slots are resolved.
+        <h1>Ask until the instruction is complete.</h1>
+        <p>
+          Uncertainty-aware email automation for faculty demos. The agent
+          clarifies missing slots, then sends only when dispatch is on.
         </p>
-        <div ref={slot} className="google-button" />
-        {error ? (
-          <p className="login-error" role="alert">
-            {error}
+        <ul>
+          <li>Recipient, subject, and body stay in your words.</li>
+          <li>SEND is live Gmail or a preview card — never a guess.</li>
+          <li>Signed-in workspace keeps the thread until New email.</li>
+        </ul>
+      </section>
+      <section className="auth-panel">
+        <div className="auth-card">
+          <p className="login-kicker">Welcome</p>
+          <h2>{mode === "signup" ? "Create your account" : "Sign in to the workspace"}</h2>
+          <p className="login-lead">
+            Use email and password, or continue with Google. Your name and
+            email appear in the sidebar.
           </p>
-        ) : null}
-        <p className="meta">
-          Continue with Google verifies your account, then keeps your name
-          and photo on this machine.
-        </p>
-      </main>
+          <div className="auth-tabs" role="tablist" aria-label="Account">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "signin"}
+              className={mode === "signin" ? "active" : undefined}
+              onClick={() => setMode("signin")}
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "signup"}
+              className={mode === "signup" ? "active" : undefined}
+              onClick={() => setMode("signup")}
+            >
+              Create Account
+            </button>
+          </div>
+          <EmailAuthForm key={mode} mode={mode} onEnter={enterWorkspace} />
+          <p className="auth-or" role="separator">
+            OR
+          </p>
+          <div ref={slot} className="google-button" />
+          {gisError ? (
+            <p className="login-error" role="alert">
+              {gisError}
+            </p>
+          ) : null}
+          <p className="meta">
+            Faculty demo: admin@uncertain.ai · Demo@1234
+          </p>
+        </div>
+      </section>
     </div>
   );
 }
 
-async function acceptCredential(
+async function acceptGoogleCredential(
   credential: string,
   onEnter: (session: Session) => void,
   setError: (message: string | null) => void,
@@ -104,9 +151,6 @@ async function acceptCredential(
     if (readSession()) {
       return;
     }
-    writeSession(profile);
-    setGoogleSignInActive(false);
-    cancelGooglePrompt();
     onEnter(profile);
   } catch (err) {
     if (isGoogleSignInActive()) {

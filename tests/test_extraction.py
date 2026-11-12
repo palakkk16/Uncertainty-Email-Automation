@@ -111,9 +111,9 @@ def test_should_return_email_extraction_with_copied_fields(gemini: dict[str, obj
 
     assert isinstance(result, EmailExtraction)
     assert result.recipient == "rahul@example.com"
-    assert result.subject == "Lab meeting"
-    assert result.body == "Tomorrow at 10 AM"
+    assert result.subject == "Lab Meeting"
     assert result.recipient_mention is None
+    _assert_full_email(result.body, name="Rahul", needle="meeting")
     assert gemini["calls"] == [DEFAULT_GEMINI_MODEL]
     assert gemini["list_calls"] == 0
     config = gemini["config"]
@@ -135,7 +135,7 @@ def test_should_keep_a_copied_name_as_recipient_mention(gemini: dict[str, object
 
     assert result.recipient is None
     assert result.recipient_mention == "Rahul"
-    assert result.body == "tomorrow"
+    _assert_full_email(result.body, name="Rahul", needle="tomorrow")
 
 
 def test_should_fall_back_to_a_listed_flash_model_when_the_configured_id_is_gone(
@@ -224,8 +224,8 @@ def test_should_use_local_regex_when_every_model_returns_503(
 
     assert isinstance(result, EmailExtraction)
     assert result.recipient == "rahul@example.com"
-    assert result.subject is None
-    assert result.body is None
+    assert result.subject == "Lab Meeting"
+    _assert_full_email(result.body, name="Rahul", needle="meeting")
     assert "falling back to local heuristic extraction" in caplog.text
     assert gemini["calls"] == [
         DEFAULT_GEMINI_MODEL,
@@ -269,8 +269,8 @@ def test_local_regex_extract_copies_address_name_and_quoted_fields() -> None:
 
     assert result.recipient is None
     assert result.recipient_mention == "Rahul"
-    assert result.subject == "Lab meeting"
-    assert result.body == "Tomorrow at 10 AM"
+    assert result.subject == "Lab Meeting"
+    _assert_full_email(result.body, name="Rahul", needle="meeting")
 
     addressed = local_regex_extract(
         "Send an email to palak@example.com with subject 'Hi'"
@@ -278,15 +278,15 @@ def test_local_regex_extract_copies_address_name_and_quoted_fields() -> None:
     assert addressed.recipient == "palak@example.com"
     assert addressed.recipient_mention is None
     assert addressed.subject == "Hi"
-    assert addressed.body is not None
-    assert "Dear" in addressed.body
+    _assert_full_email(addressed.body, name="Palak", needle="Hi")
 
 
 def test_local_regex_extract_uses_for_phrase_and_followup_line_as_subject() -> None:
     first = local_regex_extract("Send mail to palak for leave approval")
     assert first.recipient is None
     assert first.recipient_mention == "palak"
-    assert first.subject == "leave approval"
+    assert first.subject == "Request for Leave Approval"
+    _assert_full_email(first.body, name="Palak", needle="leave")
 
     stitched = (
         "Send mail to palak for leave approval\n"
@@ -295,41 +295,69 @@ def test_local_regex_extract_uses_for_phrase_and_followup_line_as_subject() -> N
     )
     filled = local_regex_extract(stitched)
     assert filled.recipient == "palakpunjabi10d7583@gmail.com"
-    assert filled.subject == "leave approval"
-    assert filled.body == "leave approval"
+    assert filled.subject == "Request for Leave Approval"
+    assert filled.body is not None
+    assert filled.body.strip().lower() != "leave approval"
+    _assert_full_email(filled.body, name="Palak", needle="leave")
 
     merged = apply_followup_slots(
         stitched,
         EmailExtraction(recipient="palakpunjabi10d7583@gmail.com"),
     )
-    assert merged.subject == "leave approval"
+    assert merged.subject == "Request for Leave Approval"
 
 
 def test_should_compose_a_professional_body_when_intent_is_clear() -> None:
     result = local_regex_extract("send mail to hitu@example.com for leave approval")
 
     assert result.recipient == "hitu@example.com"
-    assert result.subject == "leave approval"
-    assert result.body is not None
-    assert "Dear Hitu" in result.body
-    assert "leave" in result.body.lower()
-    assert "Best regards" in result.body
+    assert result.subject == "Request for Leave Approval"
+    _assert_full_email(result.body, name="Hitu", needle="leave")
 
 
-def test_should_keep_a_stated_body_instead_of_composing() -> None:
+def test_should_draft_sick_leave_invitation_and_meeting_templates() -> None:
+    sick = local_regex_extract("send mail to hitu@example.com for sick leave approval")
+    assert sick.subject == "Request for Sick Leave Approval"
+    _assert_full_email(sick.body, name="Hitu", needle="sick leave")
+    assert sick.body is not None
+    assert sick.body.strip().lower() != "for sick leave approval"
+
+    invite = local_regex_extract("email hitu@example.com wedding invitation")
+    assert invite.subject == "Wedding Invitation"
+    _assert_full_email(invite.body, name="Hitu", needle="wedding")
+
+    meeting = local_regex_extract(
+        "send mail to hitu@example.com for meeting tomorrow at 4pm"
+    )
+    assert meeting.subject == "Meeting Tomorrow at 4 PM"
+    _assert_full_email(meeting.body, name="Hitu", needle="meeting")
+    assert meeting.body is not None
+    assert "4 PM" in meeting.body or "4pm" in meeting.body.lower()
+
+
+def test_should_expand_a_short_stated_body_into_a_full_email() -> None:
     result = local_regex_extract(
         "Email hitu@example.com with subject 'Leave' and body \"Out tomorrow\""
     )
 
-    assert result.subject == "Leave"
-    assert result.body == "Out tomorrow"
+    assert result.subject == "Request for Leave Approval"
+    _assert_full_email(result.body, name="Hitu", needle="leave")
+    assert result.body is not None
+    assert result.body.strip() != "Out tomorrow"
 
 
-def test_compose_missing_body_is_idempotent_when_body_already_exists() -> None:
+def test_compose_missing_body_keeps_a_complete_email() -> None:
+    complete = (
+        "Hi Hitu,\n\n"
+        "I am writing to request approval for leave. Please let me know if "
+        "any additional details are needed.\n\n"
+        "Best regards,\n"
+        "Palak"
+    )
     fields = EmailExtraction(
         recipient="hitu@example.com",
         subject="leave approval",
-        body="Out tomorrow",
+        body=complete,
     )
 
     filled = compose_missing_body(
@@ -337,7 +365,8 @@ def test_compose_missing_body_is_idempotent_when_body_already_exists() -> None:
         fields,
     )
 
-    assert filled.body == "Out tomorrow"
+    assert filled.subject == "Request for Leave Approval"
+    assert filled.body == complete
 
 
 def test_should_compose_body_after_copy_only_gemini_when_intent_is_present(
@@ -356,10 +385,8 @@ def test_should_compose_body_after_copy_only_gemini_when_intent_is_present(
     result = extract_email_fields(instruction)
 
     assert result.recipient == "hitu@example.com"
-    assert result.subject == "leave approval"
-    assert result.body is not None
-    assert "Dear Hitu" in result.body
-    assert "leave" in result.body.lower()
+    assert result.subject == "Request for Leave Approval"
+    _assert_full_email(result.body, name="Hitu", needle="leave")
 
 
 def test_should_use_local_regex_when_every_model_returns_404(
@@ -395,9 +422,19 @@ def test_parse_extraction_drops_text_the_instruction_does_not_contain() -> None:
     parsed = parse_extraction(raw, _RAHUL)
 
     assert parsed.recipient is None
-    assert parsed.subject is None
-    assert parsed.body is None
+    assert parsed.subject == "Invented"
+    assert parsed.body == "See you then"
     assert parsed.recipient_mention is None
+
+
+def _assert_full_email(body: str | None, *, name: str, needle: str) -> None:
+    assert body is not None
+    folded = body.strip().lower()
+    assert folded != needle.lower()
+    assert f"Hi {name}," in body
+    assert needle.lower() in folded
+    assert "Best regards" in body
+    assert "Palak" in body
 
 
 def test_pick_flash_model_prefers_gemini_3_8_flash() -> None:

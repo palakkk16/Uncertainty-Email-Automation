@@ -13,6 +13,8 @@ replaced, so a test that wires dispatch by mistake fails instead of sending.
 from __future__ import annotations
 
 import os
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -23,6 +25,10 @@ os.environ["APP_ALLOW_ALL_RECIPIENTS"] = "false"
 os.environ["APP_GOOGLE_CLIENT_ID"] = "test-google-client.apps.googleusercontent.com"
 # Pin the model so a retired id in a developer's .env cannot reach the suite.
 os.environ["GEMINI_MODEL"] = "gemini-3.8-flash"
+os.environ["APP_SIGNER_NAME"] = "Palak"
+os.environ["APP_USERS_PATH"] = str(
+    Path(tempfile.gettempdir()) / f"uncertain-email-users-{os.getpid()}.json"
+)
 
 
 def _refuse_network(*_args: object, **_kwargs: object) -> None:
@@ -33,3 +39,13 @@ def _refuse_network(*_args: object, **_kwargs: object) -> None:
 def _block_gmail_network(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.dispatch.gmail._deliver", _refuse_network)
     monkeypatch.setattr("app.dispatch.gmail.Request", _refuse_network)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_password_users() -> None:
+    path = Path(os.environ["APP_USERS_PATH"])
+    if path.exists():
+        path.unlink()
+    yield
+    if path.exists():
+        path.unlink()

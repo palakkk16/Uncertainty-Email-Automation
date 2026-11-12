@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from app.config import load_dispatch_settings, load_settings
+from app.local_auth import seed_demo_users
 from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
 from app.routers.health import router as health_router
@@ -20,6 +21,7 @@ def create_app() -> FastAPI:
     """
     load_settings()
     load_dispatch_settings()
+    seed_demo_users()
     application = FastAPI(
         title="UNCERTAIN-EMAIL",
         version="0.5.0",

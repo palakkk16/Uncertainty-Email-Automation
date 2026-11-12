@@ -47,7 +47,9 @@ class Decision:
 def decide(instruction: str, extraction: EmailExtraction) -> Decision:
     """Choose ASK or SEND from slot constraints. Do not send mail."""
     recipient, mention, addresses = _recipient_slot(instruction, extraction)
-    subject = _text_slot(extraction.subject, instruction)
+    subject = _text_slot(extraction.subject, instruction, must_occur=False)
+    if subject == "resolved" and not _subject_supported(extraction.subject, instruction):
+        subject = "missing"
     body = _text_slot(extraction.body, instruction, must_occur=False)
     assessment = SlotAssessment(
         method="slot_sufficiency_threshold",
@@ -110,8 +112,8 @@ def _text_slot(
 ) -> TextStatus:
     """Resolved when the slot has non-empty text.
 
-    Subject must still occur in the instruction. Body may be an auto-drafted
-    message that does not appear in the user's words.
+    Body may be an auto-drafted message that does not appear in the user's
+    words. Subject may be a titled expansion of a topic the user stated.
     """
     if not isinstance(value, str) or not value.strip():
         return "missing"
@@ -132,6 +134,44 @@ def _resolved_fraction(
         body == "resolved",
     )
     return sum(resolved) / 3
+
+
+_SUBJECT_STOP = frozenset(
+    {
+        "a",
+        "about",
+        "an",
+        "and",
+        "at",
+        "email",
+        "for",
+        "in",
+        "mail",
+        "of",
+        "on",
+        "or",
+        "please",
+        "regarding",
+        "request",
+        "the",
+        "to",
+    }
+)
+
+
+def _subject_supported(value: str | None, instruction: str) -> bool:
+    """True when the titled subject is grounded in words the user wrote."""
+    if occurs_in(value, instruction):
+        return True
+    if not isinstance(value, str):
+        return False
+    folded = " ".join(instruction.split()).lower()
+    tokens = [token.strip(".,:;!?") for token in value.lower().split()]
+    content = [token for token in tokens if token not in _SUBJECT_STOP and len(token) > 2]
+    if not content:
+        return False
+    hits = sum(1 for token in content if token in folded)
+    return hits >= min(2, len(content))
 
 
 def _question(

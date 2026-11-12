@@ -31,8 +31,8 @@ export function ComposeView({ chat, active }: ComposeViewProps) {
         <header className="header">
           <h1>UNCERTAIN-EMAIL</h1>
           <p>
-            Ask until recipient, subject, and body are in your words. Email
-            is sent only when the server has dispatch turned on.
+            Describe what you want to write—our uncertainty-aware agent
+            clarifies missing details and drafts a complete email.
           </p>
         </header>
         <MessageList turns={chat.turns} loading={chat.loading} />

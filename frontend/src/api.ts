@@ -173,6 +173,61 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const AUTH_REJECTED = "Google sign-in was not accepted.";
 const AUTH_UNCONFIGURED = "Google sign-in is not configured.";
+const INVALID_PASSWORD = "Invalid email or password.";
+const DUPLICATE_EMAIL = "An account with that email already exists.";
+const WEAK_PASSWORD =
+  "Use a name, a valid email, and a password of at least 8 characters with a letter and a number.";
+
+export async function loginWithPassword(
+  email: string,
+  password: string,
+): Promise<Session> {
+  return postPasswordAuth("/auth/login", { email, password });
+}
+
+export async function registerAccount(
+  name: string,
+  email: string,
+  password: string,
+): Promise<Session> {
+  return postPasswordAuth("/auth/register", { name, email, password });
+}
+
+async function postPasswordAuth(
+  path: "/auth/login" | "/auth/register",
+  body: Record<string, string>,
+): Promise<Session> {
+  const existing = readSession();
+  if (existing) {
+    return existing;
+  }
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new ChatRequestError("network", NETWORK);
+  }
+  if (response.status === 401) {
+    throw new ChatRequestError("rejected", INVALID_PASSWORD);
+  }
+  if (response.status === 409) {
+    throw new ChatRequestError("rejected", DUPLICATE_EMAIL);
+  }
+  if (response.status === 422) {
+    throw new ChatRequestError("rejected", path === "/auth/register" ? WEAK_PASSWORD : INVALID_PASSWORD);
+  }
+  if (!response.ok) {
+    throw new ChatRequestError("unexpected", UNEXPECTED);
+  }
+  return readAuthProfile(response);
+}
 
 export async function verifyGoogleCredential(credential: string): Promise<Session> {
   const existing = readSession();
@@ -201,6 +256,10 @@ export async function verifyGoogleCredential(credential: string): Promise<Sessio
   if (!response.ok) {
     throw new ChatRequestError("unexpected", UNEXPECTED);
   }
+  return readAuthProfile(response);
+}
+
+async function readAuthProfile(response: Response): Promise<Session> {
   let payload: unknown;
   try {
     payload = await response.json();

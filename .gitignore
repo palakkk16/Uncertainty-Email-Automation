@@ -13,6 +13,8 @@ venv/
 token.json
 credentials/
 client_secret*.json
+data/users.json
+data/users.tmp
 
 # Frontend
 frontend/node_modules/

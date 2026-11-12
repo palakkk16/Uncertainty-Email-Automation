@@ -1,14 +1,14 @@
 """Best-effort field copy when Gemini is unavailable.
 
-Recipient and subject stay copy-only. A missing body is drafted only when
-the instruction already states a subject or an explicit intent such as
-leave approval.
+Recipient stays copy-only. A short topic becomes a titled subject and a
+complete drafted body so a fragment is never sent as the message.
 """
 
 from __future__ import annotations
 
 import re
 
+from app.extraction.compose import compose_missing_body
 from app.extraction.mentions import copied_mention, span_mention
 from app.schemas.chat import EmailExtraction
 
@@ -22,13 +22,22 @@ _TO_NAME_RE = re.compile(
 _FOR_SUBJECT_RE = re.compile(
     r"(?i)\bfor\s+(.+?)(?=\s+and\s+body\b|\s+with\s+body\b|\n|$)"
 )
+_SUBJECT_LABEL_RE = re.compile(
+    r"(?i)\bsubject\s+(?:is\s+|:\s*)?(.+?)(?=\s+and\s+body\b|\s+with\s+body\b|\n|$)"
+)
+_BODY_LABEL_RE = re.compile(
+    r"(?i)\b(?:and\s+)?body\s+(?:is\s+|:\s*)?(.+)$"
+)
 _COMMAND_RE = re.compile(
     r"(?i)^(send|e-?mail|mail|message|write|contact)\b"
+)
+_AFTER_EMAIL_RE = re.compile(
+    r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\s+(.+)$"
 )
 
 
 def local_regex_extract(instruction: str) -> EmailExtraction:
-    """Copy an address, a name, and quoted or follow-up subject/body from the instruction."""
+    """Copy an address and a name, then draft subject and body from the topic."""
     emails = _EMAIL_RE.findall(instruction)
     recipient = emails[0] if emails else None
     quoted = [" ".join((group or "").split()) for group in _quoted_parts(instruction)]
@@ -39,47 +48,29 @@ def local_regex_extract(instruction: str) -> EmailExtraction:
     fields = EmailExtraction(
         recipient=recipient,
         recipient_mention=mention,
-        subject=quoted[0] if quoted else _for_subject(instruction),
-        body=quoted[1] if len(quoted) > 1 else None,
+        subject=quoted[0] if quoted else _stated_subject(instruction),
+        body=quoted[1] if len(quoted) > 1 else _labeled_body(instruction),
     )
     return apply_followup_slots(instruction, fields)
 
 
-def compose_missing_body(instruction: str, fields: EmailExtraction) -> EmailExtraction:
-    """Draft a professional body when the user stated a subject or intent."""
-    if _has_text(fields.body):
-        return fields
-    subject = fields.subject or _for_subject(instruction)
-    if not _has_text(subject):
-        return fields
-    return EmailExtraction(
-        recipient=fields.recipient,
-        recipient_mention=fields.recipient_mention,
-        subject=subject,
-        body=_professional_body(subject, fields, instruction),
-    )
-
-
 def apply_followup_slots(instruction: str, fields: EmailExtraction) -> EmailExtraction:
-    """Fill the next open text slot from the latest user line when it is a short answer.
+    """Fill a missing subject from the latest short reply, then draft the email.
 
     The frontend joins turns with newlines. A reply such as "leave approval"
-    after a subject question is that last line, not a new email command.
+    after a subject question is that last line, not a new email command, and
+    it must never be copied verbatim as the body.
     """
-    subject = fields.subject or _for_subject(instruction)
-    body = fields.body
+    subject = fields.subject or _stated_subject(instruction)
     last = _last_line(instruction)
-    if last is not None and _is_slot_answer(last) and "@" not in last:
-        if subject is None:
-            subject = last
-        elif body is None:
-            body = last
-    if subject != fields.subject or body != fields.body:
+    if subject is None and last is not None and _is_slot_answer(last) and "@" not in last:
+        subject = last
+    if subject != fields.subject:
         fields = EmailExtraction(
             recipient=fields.recipient,
             recipient_mention=fields.recipient_mention,
             subject=subject,
-            body=body,
+            body=fields.body,
         )
     return compose_missing_body(instruction, fields)
 
@@ -98,6 +89,14 @@ def _to_mention(instruction: str) -> str | None:
     return match.group(1)
 
 
+def _stated_subject(instruction: str) -> str | None:
+    return (
+        _for_subject(instruction)
+        or _labeled_subject(instruction)
+        or _after_address_topic(instruction)
+    )
+
+
 def _for_subject(instruction: str) -> str | None:
     match = _FOR_SUBJECT_RE.search(instruction)
     if match is None:
@@ -106,6 +105,37 @@ def _for_subject(instruction: str) -> str | None:
     if not text or "@" in text or _COMMAND_RE.search(text):
         return None
     return text
+
+
+def _labeled_subject(instruction: str) -> str | None:
+    match = _SUBJECT_LABEL_RE.search(instruction)
+    if match is None:
+        return None
+    text = " ".join(match.group(1).split())
+    if not text or "@" in text:
+        return None
+    return text
+
+
+def _after_address_topic(instruction: str) -> str | None:
+    match = _AFTER_EMAIL_RE.search(" ".join(instruction.split()))
+    if match is None:
+        return None
+    text = " ".join(match.group(1).split())
+    lowered = text.lower()
+    if lowered.startswith(("for ", "with ", "subject ", "and body")):
+        return None
+    if not text or "@" in text or _COMMAND_RE.search(text):
+        return None
+    return text
+
+
+def _labeled_body(instruction: str) -> str | None:
+    match = _BODY_LABEL_RE.search(instruction)
+    if match is None:
+        return None
+    text = " ".join(match.group(1).split())
+    return text or None
 
 
 def _last_line(instruction: str) -> str | None:
@@ -119,35 +149,3 @@ def _is_slot_answer(text: str) -> bool:
     if not text or _COMMAND_RE.search(text) or len(text) > 200:
         return False
     return 1 <= len(text.split()) <= 20
-
-
-def _professional_body(
-    subject: str, fields: EmailExtraction, instruction: str
-) -> str:
-    name = _addressee(fields, instruction)
-    purpose = _purpose_sentence(subject)
-    return (
-        f"Dear {name},\n\n"
-        f"{purpose} Please let me know if any further details are required.\n\n"
-        "Best regards,"
-    )
-
-
-def _addressee(fields: EmailExtraction, instruction: str) -> str:
-    mention = fields.recipient_mention or span_mention(instruction)
-    if mention:
-        return mention.split()[0].capitalize()
-    local = (fields.recipient or "").split("@", 1)[0]
-    if local.isalpha():
-        return local.capitalize()
-    return "there"
-
-
-def _purpose_sentence(subject: str) -> str:
-    if "leave" in subject.lower():
-        return "I am writing to request approval for leave."
-    return f"I am writing regarding {subject.strip()}."
-
-
-def _has_text(value: str | None) -> bool:
-    return isinstance(value, str) and bool(value.strip())

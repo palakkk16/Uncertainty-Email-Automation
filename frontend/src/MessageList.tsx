@@ -38,9 +38,8 @@ export function MessageList({ turns, loading }: MessageListProps) {
 function EmptyState() {
   return (
     <p className="empty">
-      Type an email instruction. If the recipient, subject, or body is
-      missing, you will be asked. Once all three are stated, the email is
-      sent only if the server has dispatch turned on.
+      Describe what you want to write. The agent asks for missing details
+      and drafts a complete email. It is sent only if dispatch is on.
     </p>
   );
 }

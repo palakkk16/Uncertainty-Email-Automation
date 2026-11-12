@@ -1,4 +1,4 @@
-"""One Gemini API call that copies recipient, subject, body, and a name.
+"""One Gemini API call that copies the recipient and drafts subject and body.
 
 The client lives here so tests can replace `google.genai` without touching
 the route. This module does not decide ASK vs SEND and does not send mail.
@@ -29,15 +29,20 @@ from app.schemas.chat import EmailExtraction
 logger = logging.getLogger(__name__)
 
 _SYSTEM = (
-    "Extract email fields from the user instruction. "
+    "Extract email fields and draft a complete email, like Gmail Help me write. "
     "Return JSON with exactly these keys: recipient, subject, body, recipient_mention. "
     "recipient is an email address copied verbatim from the instruction, or null. "
     "Never invent an email address. A person's name is not an email address. "
     "recipient_mention is a person's name copied verbatim from the instruction, or null. "
     "Never invent a name. "
-    "subject is the subject line copied verbatim only if the instruction states one, or null. "
-    "body is the message body copied verbatim only if the instruction states one, or null. "
-    "Do not draft, paraphrase, or fill gaps. Do not add a confidence score. "
+    "subject is a clean Title Case subject line expanded from the user's topic "
+    "(for example 'sick leave approval' becomes 'Request for Sick Leave Approval'). "
+    "Never leave a raw lowercase fragment as the subject. "
+    "body is a complete professional email: greeting (Hi FirstName, when the name "
+    "is known), one or two natural paragraphs that expand the user's intent, and "
+    "a sign-off of Best regards plus the sender's first name if known. "
+    "Never use the user's raw fragment as the entire body. "
+    "Do not invent facts the user did not imply. Do not add a confidence score. "
     "Do not choose whether to ask or send."
 )
 _PREFERRED_FLASH = (
@@ -70,12 +75,12 @@ class ExtractionRateLimited(ExtractionError):
 
 
 def extract_email_fields(instruction: str, model_name: str | None = None) -> EmailExtraction:
-    """Run one free-tier Gemini call and keep only text the user wrote.
+    """Run one free-tier Gemini call, then polish subject and body.
 
     Persistent 404/429/500/502/503 errors fall back to local regex copy so
     the chat route still receives EmailExtraction instead of HTTP 429 or 502.
-    After copy-only parse, a missing body is drafted when subject or intent
-    is already present so the user is not asked to type the message.
+    A short topic is expanded into a titled subject and a complete email.
+    Recipient addresses stay copy-only.
     """
     settings = load_settings()
     if not settings.gemini_api_key:
@@ -107,7 +112,7 @@ def extract_email_fields(instruction: str, model_name: str | None = None) -> Ema
 
 
 def parse_extraction(raw: str, instruction: str) -> EmailExtraction:
-    """Accept only copied fields. Invalid JSON is a failure, not a guess."""
+    """Keep a copied recipient. Subject and body may be drafted."""
     payload = _load_object(raw)
     try:
         parsed = EmailExtraction.model_validate(
@@ -122,8 +127,8 @@ def parse_extraction(raw: str, instruction: str) -> EmailExtraction:
         raise ExtractionError("unparseable") from exc
     return EmailExtraction(
         recipient=_stated_address(parsed.recipient, instruction),
-        subject=_stated_text(parsed.subject, instruction),
-        body=_stated_text(parsed.body, instruction),
+        subject=_single_line(parsed.subject),
+        body=_keep_body(parsed.body),
         recipient_mention=copied_mention(parsed.recipient_mention, instruction),
     )
 
@@ -257,7 +262,7 @@ def _generation_config() -> types.GenerateContentConfig:
     """JSON schema only. AFC stays off so generate_content is not treated as a tool call."""
     return types.GenerateContentConfig(
         system_instruction=_SYSTEM,
-        temperature=0,
+        temperature=0.4,
         max_output_tokens=1024,
         response_mime_type="application/json",
         response_schema=EmailExtraction,
@@ -369,21 +374,29 @@ def _load_object(raw: str) -> dict[str, object]:
 
 
 def _stated_address(value: str | None, instruction: str) -> str | None:
-    text = _stated_text(value, instruction)
-    if text is None or "@" not in text:
-        return None
-    return text
-
-
-def _stated_text(value: str | None, instruction: str) -> str | None:
     if not isinstance(value, str):
         return None
     cleaned = " ".join(value.split())
-    if not cleaned:
+    if not cleaned or "@" not in cleaned:
         return None
     if _folded(cleaned) not in _folded(instruction):
         return None
     return cleaned
+
+
+def _single_line(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = " ".join(value.split())
+    return cleaned or None
+
+
+def _keep_body(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    lines = [line.rstrip() for line in value.strip().splitlines()]
+    cleaned = "\n".join(lines).strip()
+    return cleaned or None
 
 
 def _folded(value: str) -> str:

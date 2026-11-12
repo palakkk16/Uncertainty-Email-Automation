@@ -45,6 +45,22 @@ _FULL_JSON = json.dumps(
 )
 
 
+def _assert_lab_draft(
+    extraction: dict[str, object], sent: list[tuple[str, str, str]] | None = None
+) -> None:
+    subject = extraction["subject"]
+    body = extraction["body"]
+    assert extraction["recipient"] in {"rahul@example.com", "Rahul@Example.com"}
+    assert subject == "Lab Meeting"
+    assert isinstance(body, str)
+    assert body.strip() != "Tomorrow at 10 AM"
+    assert "Hi Rahul," in body
+    assert "meeting" in body.lower()
+    assert "Best regards" in body
+    if sent is not None:
+        assert sent == [(extraction["recipient"], subject, body)]
+
+
 @pytest.fixture
 def gemini_payload() -> dict[str, object]:
     """Mutable stand-in for one generate_content response."""
@@ -190,13 +206,8 @@ def test_should_dispatch_once_with_the_draft_when_decision_is_send(
     assert body["clarification"] is None
     assert body["reply"] == "Email sent to rahul@example.com."
     assert body["dispatch"] == {"status": "sent", "message_id": "fake-id-1"}
-    assert mail.calls == [("rahul@example.com", "Lab meeting", "Tomorrow at 10 AM")]
-    assert body["extraction"] == {
-        "recipient": "rahul@example.com",
-        "subject": "Lab meeting",
-        "body": "Tomorrow at 10 AM",
-        "recipient_mention": None,
-    }
+    _assert_lab_draft(body["extraction"], mail.calls)
+    assert body["extraction"]["recipient_mention"] is None
     assert body["assessment"]["method"] == "slot_sufficiency_threshold"
     assert body["assessment"]["resolved_fraction"] == 1.0
     assert gemini_payload["calls"] == 1
@@ -241,7 +252,7 @@ def test_should_fall_back_when_the_configured_model_returns_404(
     assert response.json()["extraction"]["recipient"] == "rahul@example.com"
     assert gemini_payload["model"] == "gemini-3.8-flash"
     assert gemini_payload["list_calls"] == 1
-    assert mail.calls == [("rahul@example.com", "Lab meeting", "Tomorrow at 10 AM")]
+    _assert_lab_draft(response.json()["extraction"], mail.calls)
 
 
 def test_should_not_dispatch_when_app_dispatch_enabled_is_false(
@@ -289,9 +300,7 @@ def test_should_return_send_preview_when_recipient_is_not_on_the_allowlist(
     body = response.json()
     assert body["decision"] == "SEND"
     assert body["dispatch"] == {"status": "rejected", "message_id": None}
-    assert body["extraction"]["recipient"] == "rahul@example.com"
-    assert body["extraction"]["subject"] == "Lab meeting"
-    assert body["extraction"]["body"] == "Tomorrow at 10 AM"
+    _assert_lab_draft(body["extraction"])
     assert "allowlist" in body["reply"].lower()
     assert "No email was sent." in body["reply"]
     assert mail.calls == []
@@ -310,7 +319,7 @@ def test_should_send_to_any_address_when_dispatcher_allowlist_is_empty(
     body = response.json()
     assert body["decision"] == "SEND"
     assert body["dispatch"]["status"] == "sent"
-    assert mail.calls == [("rahul@example.com", "Lab meeting", "Tomorrow at 10 AM")]
+    _assert_lab_draft(body["extraction"], mail.calls)
 
 
 def test_should_send_when_recipient_matches_the_allowlist_in_another_case(
@@ -332,7 +341,7 @@ def test_should_send_when_recipient_matches_the_allowlist_in_another_case(
 
     assert response.status_code == 200
     assert response.json()["dispatch"]["status"] == "sent"
-    assert mail.calls == [("Rahul@Example.com", "Lab meeting", "Tomorrow at 10 AM")]
+    _assert_lab_draft(response.json()["extraction"], mail.calls)
 
 
 def test_should_return_503_when_the_gmail_token_is_unavailable(
@@ -402,13 +411,16 @@ def test_should_send_preview_without_asking_for_body_when_intent_is_clear(
     assert body["decision"] == "SEND"
     assert body["clarification"] is None
     assert body["assessment"]["body"] == "resolved"
-    assert body["extraction"]["subject"] == "leave approval"
-    assert body["extraction"]["body"] is not None
-    assert "Dear Hitu" in body["extraction"]["body"]
-    assert "leave" in body["extraction"]["body"].lower()
+    assert body["extraction"]["subject"] == "Request for Leave Approval"
+    drafted = body["extraction"]["body"]
+    assert drafted is not None
+    assert drafted.strip().lower() != "leave approval"
+    assert "Hi Hitu," in drafted
+    assert "leave" in drafted.lower()
+    assert "Best regards" in drafted
     assert mail.calls[0][0] == "hitu@example.com"
-    assert mail.calls[0][1] == "leave approval"
-    assert mail.calls[0][2] == body["extraction"]["body"]
+    assert mail.calls[0][1] == "Request for Leave Approval"
+    assert mail.calls[0][2] == drafted
 
 
 def test_chat_followup_subject_is_resolved_and_does_not_ask_again(
@@ -433,12 +445,16 @@ def test_chat_followup_subject_is_resolved_and_does_not_ask_again(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["extraction"]["subject"] == "leave approval"
+    assert body["extraction"]["subject"] == "Request for Leave Approval"
     assert body["assessment"]["subject"] == "resolved"
     assert body["decision"] == "SEND"
     assert body["clarification"] is None
+    drafted = body["extraction"]["body"]
+    assert isinstance(drafted, str)
+    assert drafted.strip().lower() != "leave approval"
+    assert "Hi Palak," in drafted
     assert mail.calls[0][0] == "palakpunjabi10d7583@gmail.com"
-    assert mail.calls[0][1] == "leave approval"
+    assert mail.calls[0][1] == "Request for Leave Approval"
 
 
 def test_chat_bare_name_asks_for_that_person(
@@ -461,8 +477,11 @@ def test_chat_bare_name_asks_for_that_person(
     assert body["decision"] == "ASK"
     assert body["phase"] == "decision_layer"
     assert body["extraction"]["recipient"] is None
-    assert body["extraction"]["subject"] is None
-    assert body["extraction"]["body"] == "tomorrow"
+    assert body["extraction"]["subject"] == "Tomorrow"
+    drafted = body["extraction"]["body"]
+    assert isinstance(drafted, str)
+    assert drafted.strip().lower() != "tomorrow"
+    assert "Hi Rahul," in drafted
     assert body["extraction"]["recipient_mention"] == "Rahul"
     assert body["assessment"]["recipient"] == "bare_name"
     assert body["clarification"] == body["reply"]
@@ -493,8 +512,7 @@ def test_chat_drops_an_address_the_user_did_not_write(
     assert body["phase"] == "decision_layer"
     assert body["decision"] == "ASK"
     assert body["extraction"]["recipient"] is None
-    assert body["extraction"]["subject"] is None
-    assert body["extraction"]["body"] is None
+    assert "rahul@example.com" not in str(body["extraction"]["recipient"])
     assert "Rahul" in body["clarification"]
     assert "@" not in body["clarification"]
     assert mail.calls == []
@@ -516,7 +534,7 @@ def test_chat_invalid_json_is_502_and_does_not_send(
     _assert_gmail_not_loaded()
 
 
-def test_chat_gemini_429_falls_back_to_local_extraction_and_does_not_send(
+def test_chat_gemini_429_falls_back_to_local_extraction(
     gemini_payload: dict[str, object],
     mail: FakeSender,
 ) -> None:
@@ -537,12 +555,11 @@ def test_chat_gemini_429_falls_back_to_local_extraction_and_does_not_send(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["decision"] == "ASK"
-    assert body["extraction"]["recipient"] == "rahul@example.com"
+    assert body["decision"] == "SEND"
+    _assert_lab_draft(body["extraction"], mail.calls)
     assert "AIza-secret" not in response.text
     assert "generativelanguage" not in response.text
     assert "RESOURCE_EXHAUSTED" not in response.text
-    assert mail.calls == []
     _assert_gmail_not_loaded()
 
 
