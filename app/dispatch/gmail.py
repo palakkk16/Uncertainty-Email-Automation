@@ -1,7 +1,8 @@
 """Send one message through the Gmail API with an existing send-only token.
 
-The token comes from the Phase 1 desktop sign-in. This module never starts a
-browser sign-in: a missing, unreadable, or broader token is unavailable
+A request-scoped user access token sends as that Gmail account. Otherwise
+the Phase 1 desktop token.json is used. This module never starts a browser
+sign-in: a missing, unreadable, or broader process token is unavailable
 until the operator signs in again. Errors carry fixed reason codes because
 Google's exception text can include token material.
 """
@@ -27,7 +28,8 @@ logger = logging.getLogger(__name__)
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
 
 RawMessage = dict[str, str]
-Deliver = Callable[[Credentials, RawMessage], str]
+Deliver = Callable[..., str]
+_MAX_USER_TOKEN_LENGTH = 4096
 
 
 class GmailSender:
@@ -38,18 +40,27 @@ class GmailSender:
         sender: str,
         token_path: Path,
         deliver: Deliver | None = None,
+        user_token: str | None = None,
     ) -> None:
         self._sender = sender
         self._token_path = token_path
         self._deliver = deliver
+        self._user_token = user_token
 
     def send(self, recipient: str, subject: str, body: str) -> str:
         """Send one message and return the Gmail message id."""
-        raw = build_raw_message(self._sender, recipient, subject, body)
-        creds = load_credentials(self._token_path)
-        # Looked up at call time so tests can replace the module-level network call.
-        deliver = self._deliver or _deliver
-        return deliver(creds, raw)
+        if self._user_token:
+            from_addr = ""
+            creds = Credentials(token=self._user_token)
+            user_access = True
+        else:
+            from_addr = self._sender
+            creds = load_credentials(self._token_path)
+            user_access = False
+        raw = build_raw_message(from_addr, recipient, subject, body)
+        if self._deliver is not None:
+            return self._deliver(creds, raw)
+        return _deliver(creds, raw, user_access=user_access)
 
 
 def build_raw_message(
@@ -59,13 +70,34 @@ def build_raw_message(
     try:
         message = EmailMessage()
         message["To"] = recipient
-        message["From"] = sender
+        if sender:
+            message["From"] = sender
         message["Subject"] = subject
         message.set_content(body)
         encoded = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
     except (ValueError, MessageError) as exc:
         raise DispatchFailed("invalid_message") from exc
     return {"raw": encoded}
+
+
+def parse_user_gmail_token(
+    x_gmail_token: str | None, authorization: str | None
+) -> str | None:
+    """Return a bearer access token from headers, or None when absent.
+
+    The token is never logged. Newlines or an oversized value are rejected
+    so they cannot be sent to Google.
+    """
+    token = (x_gmail_token or "").strip()
+    if not token and authorization:
+        scheme, _, value = authorization.partition(" ")
+        if scheme.lower() == "bearer":
+            token = value.strip()
+    if not token:
+        return None
+    if "\n" in token or "\r" in token or len(token) > _MAX_USER_TOKEN_LENGTH:
+        raise DispatchFailed("invalid_user_token")
+    return token
 
 
 def load_credentials(token_path: Path) -> Credentials:
@@ -110,7 +142,9 @@ def _write_token(creds: Credentials, token_path: Path) -> None:
     os.chmod(token_path, 0o600)
 
 
-def _deliver(creds: Credentials, raw: RawMessage) -> str:
+def _deliver(
+    creds: Credentials, raw: RawMessage, *, user_access: bool = False
+) -> str:
     """The only network call to Gmail."""
     # Imported here so loading the API does not load the Gmail client.
     from googleapiclient.discovery import build
@@ -122,6 +156,8 @@ def _deliver(creds: Credentials, raw: RawMessage) -> str:
     except HttpError as exc:
         status = getattr(getattr(exc, "resp", None), "status", "unknown")
         logger.warning("Gmail rejected the send: HTTP %s", status)
+        if user_access and status in {401, "401"}:
+            raise DispatchUnavailable("gmail_token_expired") from exc
         raise DispatchFailed("gmail_http_error") from exc
     except Exception as exc:
         logger.warning("Gmail send failed: %s", type(exc).__name__)

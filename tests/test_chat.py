@@ -344,6 +344,19 @@ def test_should_send_when_recipient_matches_the_allowlist_in_another_case(
     _assert_lab_draft(response.json()["extraction"], mail.calls)
 
 
+def test_should_ask_to_reconnect_gmail_when_the_user_token_expired(
+    gemini_payload: dict[str, object],
+    mail: FakeSender,
+) -> None:
+    mail.error = DispatchUnavailable("gmail_token_expired")
+
+    response = _post_clear(gemini_payload)
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Reconnect Gmail."}
+    assert len(mail.calls) == 1
+
+
 def test_should_return_503_when_the_gmail_token_is_unavailable(
     gemini_payload: dict[str, object],
     mail: FakeSender,

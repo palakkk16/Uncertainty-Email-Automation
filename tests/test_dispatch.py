@@ -36,6 +36,7 @@ from app.dispatch.gmail import (
     _deliver as real_deliver,
     build_raw_message,
     load_credentials,
+    parse_user_gmail_token,
 )
 from app.main import create_app
 
@@ -301,6 +302,45 @@ def test_should_be_unavailable_without_token_text_when_refresh_is_rejected(
     assert "refresh-token" not in str(info.value)
 
 
+def test_should_read_a_user_token_from_gmail_headers() -> None:
+    assert parse_user_gmail_token(" ya29.user ", None) == "ya29.user"
+    assert parse_user_gmail_token(None, "Bearer ya29.user") == "ya29.user"
+    assert parse_user_gmail_token("", "Bearer ya29.user") == "ya29.user"
+    assert parse_user_gmail_token("ya29.header", "Bearer ya29.other") == "ya29.header"
+    assert parse_user_gmail_token(None, "Basic abc") is None
+    assert parse_user_gmail_token(None, None) is None
+
+
+def test_should_reject_a_user_token_with_newlines() -> None:
+    with pytest.raises(DispatchFailed) as info:
+        parse_user_gmail_token("ya29.\nsecret", None)
+    assert str(info.value) == "invalid_user_token"
+
+
+def test_should_send_with_a_user_access_token_when_the_file_is_missing(
+    tmp_path: Path,
+) -> None:
+    seen: list[str | None] = []
+    missing = tmp_path / "missing.json"
+    sender = GmailSender(
+        "me@example.com",
+        missing,
+        deliver=lambda creds, _raw: seen.append(getattr(creds, "token", None)) or "user-id",
+        user_token="ya29.user-access",
+    )
+
+    assert sender.send(*_fields()) == "user-id"
+    assert seen == ["ya29.user-access"]
+    assert not missing.exists()
+
+
+def test_should_build_a_raw_message_without_from_when_sender_is_blank() -> None:
+    raw = build_raw_message("", *_fields())
+    parsed = message_from_bytes(base64.urlsafe_b64decode(raw["raw"]), policy=policy.default)
+    assert parsed["From"] is None
+    assert parsed["To"] == "rahul@example.com"
+
+
 def test_should_send_the_raw_message_through_the_injected_delivery(tmp_path: Path) -> None:
     seen: list[dict[str, str]] = []
     sender = GmailSender(
@@ -315,19 +355,22 @@ def test_should_send_the_raw_message_through_the_injected_delivery(tmp_path: Pat
 
 
 def _fake_gmail_client(
-    monkeypatch: pytest.MonkeyPatch, result: object = None, rejected: bool = False
+    monkeypatch: pytest.MonkeyPatch,
+    result: object = None,
+    rejected: bool = False,
+    status: int = 403,
 ) -> list[dict[str, object]]:
     """Install fake googleapiclient modules. monkeypatch removes them afterwards."""
     sent: list[dict[str, object]] = []
 
     class HttpError(Exception):
-        def __init__(self, status: int) -> None:
+        def __init__(self, code: int) -> None:
             super().__init__("https://gmail.googleapis.com ya29.secret")
-            self.resp = SimpleNamespace(status=status)
+            self.resp = SimpleNamespace(status=code)
 
     def execute() -> object:
         if rejected:
-            raise HttpError(403)
+            raise HttpError(status)
         return result
 
     def send(**kwargs: object) -> SimpleNamespace:
@@ -370,6 +413,27 @@ def test_should_fail_without_provider_text_when_gmail_does_not_confirm(
         real_deliver(object(), {"raw": "abc"})
     assert str(info.value) == reason
     assert "ya29" not in str(info.value)
+
+
+def test_should_mark_a_user_token_expired_on_gmail_401(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_gmail_client(monkeypatch, rejected=True, status=401)
+
+    with pytest.raises(DispatchUnavailable) as info:
+        real_deliver(object(), {"raw": "abc"}, user_access=True)
+    assert str(info.value) == "gmail_token_expired"
+    assert "ya29" not in str(info.value)
+
+
+def test_should_fail_on_gmail_401_for_the_server_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_gmail_client(monkeypatch, rejected=True, status=401)
+
+    with pytest.raises(DispatchFailed) as info:
+        real_deliver(object(), {"raw": "abc"})
+    assert str(info.value) == "gmail_http_error"
 
 
 def test_should_never_start_a_browser_sign_in() -> None:

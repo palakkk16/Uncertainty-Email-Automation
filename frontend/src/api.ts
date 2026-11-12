@@ -1,3 +1,4 @@
+import { activeGmailAccessToken, clearGmailToken } from "./gmailToken.ts";
 import { readSession, type Session } from "./session.ts";
 import type { ChatResponse, DispatchResult, EmailExtraction } from "./types.ts";
 
@@ -33,12 +34,17 @@ const DISPATCH_ERRORS: Record<string, string> = {
     "The email was not sent. The server's Gmail sign-in needs attention.",
   "Recipient is not on the dispatch allowlist.":
     "The email was not sent. That recipient is not on the dispatch allowlist.",
+  "Reconnect Gmail.": "Reconnect Gmail to send from your account.",
 };
 
 export async function postChat(message: string): Promise<ChatResponse> {
   const response = await readResponse(message);
   if (response.status === 429) {
     throw new ChatRequestError("rate_limit", RATE_LIMIT);
+  }
+  if (response.status === 401) {
+    clearGmailToken();
+    throw new ChatRequestError("dispatch", "Reconnect Gmail to send from your account.");
   }
   if ([403, 502, 503].includes(response.status)) {
     throw await serverError(response);
@@ -53,13 +59,18 @@ export async function postChat(message: string): Promise<ChatResponse> {
 }
 
 async function readResponse(message: string): Promise<Response> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+  const gmailToken = activeGmailAccessToken();
+  if (gmailToken) {
+    headers["X-Gmail-Token"] = gmailToken;
+  }
   try {
     return await fetch("/chat", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers,
       body: JSON.stringify({ message }),
     });
   } catch {

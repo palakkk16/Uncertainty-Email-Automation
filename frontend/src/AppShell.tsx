@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { GmailConnect } from "./GmailConnect.tsx";
 import type { Session } from "./session.ts";
 
 export type AppView = "compose" | "audit";
@@ -62,6 +63,7 @@ export function AppShell({
               <p className="sidebar-who">{session.email}</p>
             </div>
           </div>
+          <GmailConnect email={session.email} />
           <button type="button" className="sign-out" onClick={onSignOut}>
             Sign Out
           </button>

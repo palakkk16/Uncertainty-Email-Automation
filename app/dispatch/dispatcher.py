@@ -6,12 +6,14 @@ The router depends on `get_dispatcher`, so tests replace it through
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Annotated, Protocol
+
+from fastapi import Header, HTTPException
 
 from app.config import load_dispatch_settings
 from app.decision import Draft
-from app.dispatch.errors import DispatchRejected
-from app.dispatch.gmail import GmailSender
+from app.dispatch.errors import DispatchFailed, DispatchRejected
+from app.dispatch.gmail import GmailSender, parse_user_gmail_token
 from app.dispatch.guard import DuplicateGuard, message_key
 from app.schemas.chat import DispatchResult
 
@@ -58,10 +60,25 @@ class Dispatcher:
 _GUARD = DuplicateGuard()
 
 
-def get_dispatcher() -> Dispatcher | None:
-    """FastAPI dependency. None when APP_DISPATCH_ENABLED is false."""
+def get_dispatcher(
+    x_gmail_token: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+) -> Dispatcher | None:
+    """FastAPI dependency. None when APP_DISPATCH_ENABLED is false.
+
+    A request-scoped user access token, when present, sends as that Gmail
+    account. Otherwise the process token.json is used.
+    """
     settings = load_dispatch_settings()
     if settings is None:
         return None
-    sender = GmailSender(settings.sender, settings.token_path)
+    try:
+        user_token = parse_user_gmail_token(x_gmail_token, authorization)
+    except DispatchFailed as exc:
+        raise HTTPException(status_code=400, detail="Invalid Gmail token.") from exc
+    sender = GmailSender(
+        settings.sender,
+        settings.token_path,
+        user_token=user_token,
+    )
     return Dispatcher(sender, settings.allowed_recipients, _GUARD)

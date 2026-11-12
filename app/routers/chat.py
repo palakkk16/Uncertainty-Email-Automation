@@ -99,6 +99,11 @@ def _dispatch(dispatcher: Dispatcher | None, draft: Draft) -> DispatchResult:
         return DispatchResult(status="rejected")
     except DispatchUnavailable as exc:
         _log_reason(exc)
+        if str(exc) == "gmail_token_expired":
+            raise HTTPException(
+                status_code=401,
+                detail="Reconnect Gmail.",
+            ) from exc
         raise HTTPException(
             status_code=503,
             detail="Email dispatch is unavailable.",

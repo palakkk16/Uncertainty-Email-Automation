@@ -3,6 +3,7 @@ import { AppShell, type AppView } from "./AppShell.tsx";
 import { AuditLogView } from "./AuditLogView.tsx";
 import { ComposeView } from "./ComposeView.tsx";
 import { LoginPage } from "./LoginPage.tsx";
+import { clearGmailToken } from "./gmailToken.ts";
 import { cancelGooglePrompt, disableGoogleAutoSelect } from "./google.ts";
 import { clearSession, readSession, type Session } from "./session.ts";
 import { clearThread } from "./thread.ts";
@@ -14,6 +15,7 @@ export default function App() {
   function onSignOut() {
     disableGoogleAutoSelect();
     cancelGooglePrompt();
+    clearGmailToken();
     clearSession();
     clearThread();
     setSession(null);
