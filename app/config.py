@@ -94,11 +94,13 @@ class DispatchSettings:
     An empty allowed_recipients means any address the user wrote may be used.
     APP_ALLOW_ALL_RECIPIENTS=true (default) forces that empty set so a demo
     can send to any valid address. Entries are lowercased.
+    require_user_gmail_token forbids falling back to credentials/token.json.
     """
 
     sender: str
     token_path: Path
     allowed_recipients: frozenset[str]
+    require_user_gmail_token: bool
 
 
 def load_dispatch_settings() -> DispatchSettings | None:
@@ -113,7 +115,8 @@ def load_dispatch_settings() -> DispatchSettings | None:
     )
     if not enabled:
         return None
-    if host.lower() not in _LOOPBACK_HOSTS:
+    require_user = _require_user_gmail_token()
+    if not require_user and host.lower() not in _LOOPBACK_HOSTS:
         raise ConfigError(
             "APP_DISPATCH_ENABLED requires APP_HOST to be 127.0.0.1, localhost, or ::1"
         )
@@ -121,7 +124,36 @@ def load_dispatch_settings() -> DispatchSettings | None:
         sender=_parse_sender(os.environ.get("GMAIL_SENDER", "")),
         token_path=_parse_token_path(os.environ.get("TOKEN_PATH", "")),
         allowed_recipients=_load_allowed_recipients(),
+        require_user_gmail_token=require_user,
     )
+
+
+def _require_user_gmail_token() -> bool:
+    return _parse_bool(
+        "APP_REQUIRE_USER_GMAIL_TOKEN",
+        os.environ.get("APP_REQUIRE_USER_GMAIL_TOKEN", "false"),
+    )
+
+
+def load_cors_origins() -> tuple[str, ...]:
+    """Browser origins allowed to call this API. Wildcards are refused."""
+    load_settings()
+    raw = os.environ.get("APP_CORS_ORIGINS", "").strip()
+    if not raw:
+        raw = "http://127.0.0.1:43123,http://localhost:43123"
+    origins: list[str] = []
+    for item in raw.split(","):
+        origin = item.strip().rstrip("/")
+        if not origin:
+            continue
+        if origin == "*" or not origin.startswith(("http://", "https://")):
+            raise ConfigError(
+                "APP_CORS_ORIGINS must be comma-separated http(s) origins"
+            )
+        origins.append(origin)
+    if not origins:
+        raise ConfigError("APP_CORS_ORIGINS must list at least one origin")
+    return tuple(origins)
 
 
 def _parse_bool(name: str, raw: str) -> bool:

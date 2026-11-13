@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import load_dispatch_settings, load_settings
+from app.config import load_cors_origins, load_dispatch_settings, load_settings
 from app.local_auth import seed_demo_users
 from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
@@ -21,6 +22,7 @@ def create_app() -> FastAPI:
     """
     load_settings()
     load_dispatch_settings()
+    origins = load_cors_origins()
     seed_demo_users()
     application = FastAPI(
         title="UNCERTAIN-EMAIL",
@@ -31,6 +33,13 @@ def create_app() -> FastAPI:
             "A SEND is delivered through Gmail only when APP_DISPATCH_ENABLED "
             "is true."
         ),
+    )
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(origins),
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "Accept", "X-Gmail-Token"],
     )
     application.include_router(chat_router)
     application.include_router(health_router)

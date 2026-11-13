@@ -1,3 +1,4 @@
+import { apiUrl } from "./apiBase.ts";
 import { activeGmailAccessToken, clearGmailToken } from "./gmailToken.ts";
 import { readSession, type Session } from "./session.ts";
 import type { ChatResponse, DispatchResult, EmailExtraction } from "./types.ts";
@@ -35,7 +36,15 @@ const DISPATCH_ERRORS: Record<string, string> = {
   "Recipient is not on the dispatch allowlist.":
     "The email was not sent. That recipient is not on the dispatch allowlist.",
   "Reconnect Gmail.": "Reconnect Gmail to send from your account.",
+  "Please click 'Connect Gmail to Send' in the sidebar first.":
+    "Please click 'Connect Gmail to Send' in the sidebar first.",
 };
+
+export async function fetchHealthConfig(): Promise<Response> {
+  return fetch(apiUrl("/health/config"), {
+    headers: { Accept: "application/json" },
+  });
+}
 
 export async function postChat(message: string): Promise<ChatResponse> {
   const response = await readResponse(message);
@@ -68,7 +77,7 @@ async function readResponse(message: string): Promise<Response> {
     headers["X-Gmail-Token"] = gmailToken;
   }
   try {
-    return await fetch("/chat", {
+    return await fetch(apiUrl("/chat"), {
       method: "POST",
       headers,
       body: JSON.stringify({ message }),
@@ -214,7 +223,7 @@ async function postPasswordAuth(
   }
   let response: Response;
   try {
-    response = await fetch(path, {
+    response = await fetch(apiUrl(path), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -247,7 +256,7 @@ export async function verifyGoogleCredential(credential: string): Promise<Sessio
   }
   let response: Response;
   try {
-    response = await fetch("/auth/google", {
+    response = await fetch(apiUrl("/auth/google"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

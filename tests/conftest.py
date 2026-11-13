@@ -22,6 +22,7 @@ if not os.environ.get("GEMINI_API_KEY", "").strip():
     os.environ["GEMINI_API_KEY"] = "test-not-a-real-key"
 os.environ["APP_DISPATCH_ENABLED"] = "false"
 os.environ["APP_ALLOW_ALL_RECIPIENTS"] = "false"
+os.environ["APP_REQUIRE_USER_GMAIL_TOKEN"] = "false"
 os.environ["APP_GOOGLE_CLIENT_ID"] = "test-google-client.apps.googleusercontent.com"
 # Pin the model so a retired id in a developer's .env cannot reach the suite.
 os.environ["GEMINI_MODEL"] = "gemini-3.8-flash"

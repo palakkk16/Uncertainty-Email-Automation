@@ -41,11 +41,13 @@ class GmailSender:
         token_path: Path,
         deliver: Deliver | None = None,
         user_token: str | None = None,
+        require_user_token: bool = False,
     ) -> None:
         self._sender = sender
         self._token_path = token_path
         self._deliver = deliver
         self._user_token = user_token
+        self._require_user_token = require_user_token
 
     def send(self, recipient: str, subject: str, body: str) -> str:
         """Send one message and return the Gmail message id."""
@@ -53,6 +55,8 @@ class GmailSender:
             from_addr = ""
             creds = Credentials(token=self._user_token)
             user_access = True
+        elif self._require_user_token:
+            raise DispatchUnavailable("user_gmail_required")
         else:
             from_addr = self._sender
             creds = load_credentials(self._token_path)

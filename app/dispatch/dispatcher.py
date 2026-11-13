@@ -80,5 +80,6 @@ def get_dispatcher(
         settings.sender,
         settings.token_path,
         user_token=user_token,
+        require_user_token=settings.require_user_gmail_token,
     )
     return Dispatcher(sender, settings.allowed_recipients, _GUARD)

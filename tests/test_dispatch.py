@@ -18,10 +18,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 
-from app.config import ConfigError, load_dispatch_settings
+from app.config import ConfigError, load_cors_origins, load_dispatch_settings
 from app.decision import Draft
 from app.dispatch import (
     DispatchFailed,
@@ -51,6 +52,8 @@ _DISPATCH_ENV = (
     "ALLOWED_RECIPIENTS",
     "APP_ALLOW_ALL_RECIPIENTS",
     "ALLOW_ALL_RECIPIENTS",
+    "APP_REQUIRE_USER_GMAIL_TOKEN",
+    "APP_CORS_ORIGINS",
 )
 
 
@@ -81,6 +84,7 @@ def test_should_load_settings_when_dispatch_is_enabled(env: pytest.MonkeyPatch) 
     assert settings.sender == "me@example.com"
     assert settings.token_path == Path(__file__).resolve().parents[1] / "credentials/token.json"
     assert settings.allowed_recipients == {"rahul@example.com", "priya@example.com"}
+    assert settings.require_user_gmail_token is False
 
 
 def test_should_merge_dispatch_allowlist_aliases(env: pytest.MonkeyPatch) -> None:
@@ -132,6 +136,63 @@ def test_should_honor_allow_all_recipients_alias(env: pytest.MonkeyPatch) -> Non
 
     assert settings is not None
     assert settings.allowed_recipients == frozenset()
+
+
+def test_should_allow_a_public_bind_when_user_gmail_tokens_are_required(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("APP_HOST", "0.0.0.0")
+    env.setenv("APP_REQUIRE_USER_GMAIL_TOKEN", "true")
+
+    settings = load_dispatch_settings()
+
+    assert settings is not None
+    assert settings.require_user_gmail_token is True
+
+
+def test_should_default_cors_to_the_local_vite_origins(env: pytest.MonkeyPatch) -> None:
+    assert load_cors_origins() == (
+        "http://127.0.0.1:43123",
+        "http://localhost:43123",
+    )
+
+
+def test_should_load_comma_separated_cors_origins(env: pytest.MonkeyPatch) -> None:
+    env.setenv(
+        "APP_CORS_ORIGINS",
+        "https://your-app.vercel.app, http://127.0.0.1:43123/",
+    )
+    assert load_cors_origins() == (
+        "https://your-app.vercel.app",
+        "http://127.0.0.1:43123",
+    )
+
+
+def test_should_refuse_a_wildcard_cors_origin(env: pytest.MonkeyPatch) -> None:
+    env.setenv("APP_CORS_ORIGINS", "*")
+    with pytest.raises(ConfigError):
+        load_cors_origins()
+
+
+def test_should_allow_the_configured_cors_origin_on_preflight(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("APP_CORS_ORIGINS", "https://your-app.vercel.app")
+    client = TestClient(create_app())
+
+    response = client.options(
+        "/health",
+        headers={
+            "Origin": "https://your-app.vercel.app",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,x-gmail-token",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "https://your-app.vercel.app"
+    allow_headers = response.headers.get("access-control-allow-headers", "").lower()
+    assert "x-gmail-token" in allow_headers
 
 
 @pytest.mark.parametrize(
@@ -315,6 +376,39 @@ def test_should_reject_a_user_token_with_newlines() -> None:
     with pytest.raises(DispatchFailed) as info:
         parse_user_gmail_token("ya29.\nsecret", None)
     assert str(info.value) == "invalid_user_token"
+
+
+def test_should_refuse_token_file_fallback_when_a_user_token_is_required(
+    tmp_path: Path,
+) -> None:
+    path = _write_token(tmp_path / "token.json")
+    sender = GmailSender(
+        "me@example.com",
+        path,
+        deliver=lambda _creds, _raw: "should-not-send",
+        require_user_token=True,
+    )
+
+    with pytest.raises(DispatchUnavailable) as info:
+        sender.send(*_fields())
+    assert str(info.value) == "user_gmail_required"
+
+
+def test_should_send_with_a_user_token_when_fallback_is_forbidden(
+    tmp_path: Path,
+) -> None:
+    seen: list[str | None] = []
+    sender = GmailSender(
+        "me@example.com",
+        tmp_path / "missing.json",
+        deliver=lambda creds, _raw: seen.append(getattr(creds, "token", None))
+        or "user-id",
+        user_token="ya29.user-access",
+        require_user_token=True,
+    )
+
+    assert sender.send(*_fields()) == "user-id"
+    assert seen == ["ya29.user-access"]
 
 
 def test_should_send_with_a_user_access_token_when_the_file_is_missing(

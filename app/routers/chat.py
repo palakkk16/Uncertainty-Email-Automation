@@ -104,6 +104,11 @@ def _dispatch(dispatcher: Dispatcher | None, draft: Draft) -> DispatchResult:
                 status_code=401,
                 detail="Reconnect Gmail.",
             ) from exc
+        if str(exc) == "user_gmail_required":
+            raise HTTPException(
+                status_code=403,
+                detail="Please click 'Connect Gmail to Send' in the sidebar first.",
+            ) from exc
         raise HTTPException(
             status_code=503,
             detail="Email dispatch is unavailable.",
