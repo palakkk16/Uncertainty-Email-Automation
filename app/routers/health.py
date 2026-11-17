@@ -29,7 +29,7 @@ class HealthConfigResponse(BaseModel):
     uncertainty_policy: str
 
 
-@router.get("/health", response_model=HealthResponse)
+@router.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)
 async def health() -> HealthResponse:
     """Report that the process is up. Nothing else is probed."""
     return HealthResponse(status="ok")

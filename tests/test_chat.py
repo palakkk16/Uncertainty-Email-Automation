@@ -168,6 +168,13 @@ def test_health_returns_ok(gemini_payload: dict[str, object]) -> None:
     assert gemini_payload["calls"] == 0
 
 
+def test_health_head_returns_ok(gemini_payload: dict[str, object]) -> None:
+    response = client.head("/health")
+
+    assert response.status_code == 200
+    assert gemini_payload["calls"] == 0
+
+
 def test_health_config_reports_guardrails_without_secrets(
     gemini_payload: dict[str, object],
 ) -> None:
@@ -224,7 +231,7 @@ def test_should_fall_back_when_the_configured_model_returns_404(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gemini_payload["text"] = _FULL_JSON
-    gemini_payload["listed_models"] = ["models/gemini-3.8-flash"]
+    gemini_payload["listed_models"] = ["models/gemini-2.5-flash-lite"]
     gemini_payload["errors"] = {
         "gemini-2.5-flash": ClientError(
             404,
@@ -251,7 +258,7 @@ def test_should_fall_back_when_the_configured_model_returns_404(
     assert response.status_code == 200
     assert response.json()["decision"] == "SEND"
     assert response.json()["extraction"]["recipient"] == "rahul@example.com"
-    assert gemini_payload["model"] == "gemini-3.8-flash"
+    assert gemini_payload["model"] == "gemini-2.5-flash-lite"
     assert gemini_payload["list_calls"] == 1
     _assert_lab_draft(response.json()["extraction"], mail.calls)
 

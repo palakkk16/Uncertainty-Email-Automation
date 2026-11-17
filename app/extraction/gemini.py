@@ -18,6 +18,7 @@ from google.genai import errors, types
 from pydantic import ValidationError
 
 from app.config import (
+    DEFAULT_GEMINI_FALLBACK_MODEL,
     DEFAULT_GEMINI_MODEL,
     GEMINI_HTTP_RETRY_ATTEMPTS,
     GEMINI_HTTP_TIMEOUT_MS,
@@ -53,15 +54,18 @@ _SYSTEM = (
 _PREFERRED_FLASH = (
     DEFAULT_GEMINI_MODEL,
     "gemini-2.5-flash",
-    "gemini-3.8-flash",
-    "gemini-1.5-flash",
+    DEFAULT_GEMINI_FALLBACK_MODEL,
+    "gemini-2.0-flash",
 )
 _PREFERRED_LITE = (
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
+    DEFAULT_GEMINI_FALLBACK_MODEL,
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
     "gemini-flash-lite-latest",
 )
-_BUSY_FLASH = frozenset({"gemini-3.8-flash", "gemini-flash-latest"})
+_BUSY_FLASH = frozenset(
+    {DEFAULT_GEMINI_MODEL, "gemini-2.5-flash", "gemini-flash-latest"}
+)
 _ATTEMPTS = 2
 _RETRY_SECONDS = 0.5
 _RETRYABLE_CODES = frozenset({500, 502, 503})

@@ -17,6 +17,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-2.5-flash-lite"
 GEMINI_HTTP_TIMEOUT_MS = 12_000
 # SDK attempts include the original request. 1 means no extra HTTP retries;
 # the extractor still retries a 503 once at the call layer.
