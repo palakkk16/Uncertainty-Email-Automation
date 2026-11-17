@@ -25,7 +25,7 @@ const RATE_LIMIT = "Gemini rate limit. Wait and try again.";
 const EXTRACTION = "Extraction failed. Try again.";
 const NETWORK = "Cannot reach the API.";
 const STALL = "The server took too long. Try Check again.";
-const CHECK_TIMEOUT_MS = 20_000;
+const CHECK_TIMEOUT_MS = 35_000;
 const REJECTED =
   "That instruction was not accepted. Keep it between 1 and 4000 characters.";
 const UNEXPECTED = "The API returned an unexpected error. Try again.";
