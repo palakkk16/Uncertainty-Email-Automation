@@ -108,11 +108,12 @@ def _patch_gemini_client(
             ]
 
     class _Client:
-        def __init__(self, *, api_key: str) -> None:
+        def __init__(self, *, api_key: str, http_options: object = None) -> None:
             # Presence only. Do not retain the key on the instance.
             if not api_key:
                 raise RuntimeError("empty api key")
             gemini_payload["constructed"] = int(gemini_payload["constructed"]) + 1
+            gemini_payload["http_options"] = http_options
             self.models = _Models()
 
     monkeypatch.setattr("app.extraction.gemini.genai.Client", _Client)
@@ -544,6 +545,20 @@ def test_chat_drops_an_address_the_user_did_not_write(
     assert "Rahul" in body["clarification"]
     assert "@" not in body["clarification"]
     assert mail.calls == []
+
+
+def test_should_return_502_when_gemini_times_out(
+    gemini_payload: dict[str, object],
+    mail: FakeSender,
+) -> None:
+    gemini_payload["error"] = TimeoutError()
+
+    response = _post_clear(gemini_payload)
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Gemini extraction failed."}
+    assert mail.calls == []
+    assert gemini_payload["calls"] == 1
 
 
 def test_chat_invalid_json_is_502_and_does_not_send(

@@ -8,8 +8,14 @@ from types import SimpleNamespace
 import pytest
 from google.genai.errors import ClientError
 
-from app.config import DEFAULT_GEMINI_MODEL, Settings
+from app.config import (
+    DEFAULT_GEMINI_MODEL,
+    GEMINI_HTTP_RETRY_ATTEMPTS,
+    GEMINI_HTTP_TIMEOUT_MS,
+    Settings,
+)
 from app.extraction.gemini import (
+    ExtractionError,
     extract_email_fields,
     local_regex_extract,
     parse_extraction,
@@ -54,11 +60,12 @@ def gemini(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         ),
         "calls": [],
         "listed": [
-            "models/gemini-3.8-flash",
+            "models/gemini-2.5-flash",
             "models/gemini-flash-latest",
             "models/gemini-3.5-flash-lite",
-            "models/gemini-2.5-flash",
+            "models/gemini-3.8-flash",
         ],
+        "http_options": None,
         "errors": {},
         "fail_times": {},
         "fail_code": 503,
@@ -96,9 +103,10 @@ def gemini(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             ]
 
     class _Client:
-        def __init__(self, *, api_key: str) -> None:
+        def __init__(self, *, api_key: str, http_options: object = None) -> None:
             if not api_key:
                 raise RuntimeError("empty api key")
+            state["http_options"] = http_options
             self.models = _Models()
 
     monkeypatch.setattr("app.extraction.gemini.genai.Client", _Client)
@@ -116,6 +124,10 @@ def test_should_return_email_extraction_with_copied_fields(gemini: dict[str, obj
     _assert_full_email(result.body, name="Rahul", needle="meeting")
     assert gemini["calls"] == [DEFAULT_GEMINI_MODEL]
     assert gemini["list_calls"] == 0
+    options = gemini["http_options"]
+    assert options is not None
+    assert options.timeout == GEMINI_HTTP_TIMEOUT_MS
+    assert options.retry_options.attempts == GEMINI_HTTP_RETRY_ATTEMPTS
     config = gemini["config"]
     assert config.automatic_function_calling.disable is True
     assert config.response_mime_type == "application/json"
@@ -158,6 +170,20 @@ def test_should_fall_back_to_a_listed_flash_model_when_the_configured_id_is_gone
     assert result.recipient == "rahul@example.com"
     assert gemini["calls"] == ["gemini-2.5-flash", "gemini-3.8-flash"]
     assert gemini["list_calls"] == 1
+
+
+def test_should_fail_on_a_gemini_timeout_without_retrying(
+    gemini: dict[str, object],
+) -> None:
+    gemini["errors"] = {DEFAULT_GEMINI_MODEL: TimeoutError()}
+
+    with pytest.raises(ExtractionError) as info:
+        extract_email_fields(_CLEAR)
+
+    assert str(info.value) == "timeout"
+    assert gemini["calls"] == [DEFAULT_GEMINI_MODEL]
+    assert gemini["sleeps"] == []
+    assert gemini["list_calls"] == 0
 
 
 def test_should_retry_a_503_on_the_same_model_then_succeed(
@@ -437,14 +463,15 @@ def _assert_full_email(body: str | None, *, name: str, needle: str) -> None:
     assert "Palak" in body
 
 
-def test_pick_flash_model_prefers_gemini_3_8_flash() -> None:
+def test_pick_flash_model_prefers_gemini_2_5_flash() -> None:
     listed = [
         SimpleNamespace(name="models/gemini-2.0-flash", supported_actions=["generateContent"]),
         SimpleNamespace(name="models/gemini-3.8-flash", supported_actions=["generateContent"]),
+        SimpleNamespace(name="models/gemini-2.5-flash", supported_actions=["generateContent"]),
         SimpleNamespace(name="models/gemini-3-pro", supported_actions=["generateContent"]),
     ]
 
-    assert pick_flash_model(listed, failed="gemini-2.5-flash") == "gemini-3.8-flash"
+    assert pick_flash_model(listed, failed="gemini-1.5-flash") == "gemini-2.5-flash"
 
 
 def test_pick_flash_model_prefers_lite_when_standard_flash_is_busy() -> None:

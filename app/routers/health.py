@@ -30,7 +30,7 @@ class HealthConfigResponse(BaseModel):
 
 
 @router.get("/health", response_model=HealthResponse)
-def health() -> HealthResponse:
+async def health() -> HealthResponse:
     """Report that the process is up. Nothing else is probed."""
     return HealthResponse(status="ok")
 

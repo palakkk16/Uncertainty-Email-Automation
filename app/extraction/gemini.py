@@ -17,7 +17,12 @@ from google import genai
 from google.genai import errors, types
 from pydantic import ValidationError
 
-from app.config import DEFAULT_GEMINI_MODEL, load_settings
+from app.config import (
+    DEFAULT_GEMINI_MODEL,
+    GEMINI_HTTP_RETRY_ATTEMPTS,
+    GEMINI_HTTP_TIMEOUT_MS,
+    load_settings,
+)
 from app.extraction.heuristic import (
     apply_followup_slots,
     compose_missing_body,
@@ -47,8 +52,8 @@ _SYSTEM = (
 )
 _PREFERRED_FLASH = (
     DEFAULT_GEMINI_MODEL,
-    "gemini-3.8-flash",
     "gemini-2.5-flash",
+    "gemini-3.8-flash",
     "gemini-1.5-flash",
 )
 _PREFERRED_LITE = (
@@ -86,7 +91,7 @@ def extract_email_fields(instruction: str, model_name: str | None = None) -> Ema
     if not settings.gemini_api_key:
         raise ExtractionUnavailable("GEMINI_API_KEY is not set")
     model = (model_name or settings.gemini_model).strip() or DEFAULT_GEMINI_MODEL
-    client = genai.Client(api_key=settings.gemini_api_key)
+    client = _gemini_client(settings.gemini_api_key)
     try:
         raw = _generate(client, model, instruction)
         fields = parse_extraction(raw, instruction)
@@ -238,6 +243,17 @@ def _call_with_retries(client: object, model: str, instruction: str) -> str:
     raise ExtractionError("retry_exhausted")
 
 
+def _gemini_client(api_key: str) -> genai.Client:
+    """One client per extraction. Timeouts and retries are capped so Render cannot hang."""
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(
+            timeout=GEMINI_HTTP_TIMEOUT_MS,
+            retry_options=types.HttpRetryOptions(attempts=GEMINI_HTTP_RETRY_ATTEMPTS),
+        ),
+    )
+
+
 def _call(client: object, model: str, instruction: str) -> str:
     response = client.models.generate_content(
         model=model,
@@ -306,7 +322,24 @@ def _normalize_model_id(value: str) -> str:
 def _map_exception(exc: BaseException) -> ExtractionError | None:
     if _is_rate_limited(exc):
         return ExtractionRateLimited(type(exc).__name__)
+    if _is_timeout(exc):
+        return ExtractionError("timeout")
     return None
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    """True for SDK/HTTP deadlines. Do not read the exception string."""
+    code = getattr(exc, "code", None)
+    if code in {408, 504}:
+        return True
+    return type(exc).__name__ in {
+        "TimeoutException",
+        "ReadTimeout",
+        "ConnectTimeout",
+        "ConnectTimeoutError",
+        "DeadlineExceeded",
+        "TimeoutError",
+    }
 
 
 def _is_retryable(exc: BaseException) -> bool:

@@ -24,6 +24,8 @@ export class ChatRequestError extends Error {
 const RATE_LIMIT = "Gemini rate limit. Wait and try again.";
 const EXTRACTION = "Extraction failed. Try again.";
 const NETWORK = "Cannot reach the API.";
+const STALL = "The server took too long. Try Check again.";
+const CHECK_TIMEOUT_MS = 20_000;
 const REJECTED =
   "That instruction was not accepted. Keep it between 1 and 4000 characters.";
 const UNEXPECTED = "The API returned an unexpected error. Try again.";
@@ -76,15 +78,27 @@ async function readResponse(message: string): Promise<Response> {
   if (gmailToken) {
     headers["X-Gmail-Token"] = gmailToken;
   }
+  const controller = new AbortController();
+  const timer = globalThis.setTimeout(() => controller.abort(), CHECK_TIMEOUT_MS);
   try {
     return await fetch(apiUrl("/chat"), {
       method: "POST",
       headers,
       body: JSON.stringify({ message }),
+      signal: controller.signal,
     });
-  } catch {
+  } catch (err) {
+    if (isAbortError(err)) {
+      throw new ChatRequestError("network", STALL);
+    }
     throw new ChatRequestError("network", NETWORK);
+  } finally {
+    globalThis.clearTimeout(timer);
   }
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
 }
 
 async function serverError(response: Response): Promise<ChatRequestError> {

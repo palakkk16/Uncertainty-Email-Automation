@@ -10,6 +10,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from app.decision import Draft, decide
 from app.decision.sufficiency import Decision
@@ -35,16 +36,16 @@ router = APIRouter()
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(
+async def chat(
     body: ChatRequest,
     dispatcher: Annotated[Dispatcher | None, Depends(get_dispatcher)],
 ) -> ChatResponse:
     """Extract stated fields, choose ASK or SEND in Python, then dispatch a SEND."""
-    fields = apply_followup_slots(body.message, _extract(body.message))
+    fields = await run_in_threadpool(_extract_fields, body.message)
     outcome = decide(body.message, fields)
     dispatch = None
     if outcome.draft is not None:
-        dispatch = _dispatch(dispatcher, outcome.draft)
+        dispatch = await run_in_threadpool(_dispatch, dispatcher, outcome.draft)
     return ChatResponse(
         reply=_reply(outcome, dispatch),
         phase="decision_layer",
@@ -54,6 +55,10 @@ def chat(
         assessment=outcome.assessment,
         dispatch=dispatch,
     )
+
+
+def _extract_fields(message: str) -> EmailExtraction:
+    return apply_followup_slots(message, _extract(message))
 
 
 def _extract(message: str) -> EmailExtraction:

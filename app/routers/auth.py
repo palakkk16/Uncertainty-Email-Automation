@@ -6,6 +6,7 @@ import logging
 import re
 
 from fastapi import APIRouter, HTTPException
+from starlette.concurrency import run_in_threadpool
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -105,9 +106,9 @@ class RegisterRequest(BaseModel):
 
 
 @router.post("/auth/login", response_model=GoogleProfile)
-def password_login(body: PasswordLoginRequest) -> GoogleProfile:
+async def password_login(body: PasswordLoginRequest) -> GoogleProfile:
     """Grant a workspace profile only when the password hash matches."""
-    profile = authenticate(body.email, body.password)
+    profile = await run_in_threadpool(authenticate, body.email, body.password)
     if profile is None:
         raise HTTPException(status_code=401, detail=_INVALID_LOGIN)
     return GoogleProfile(
@@ -118,10 +119,12 @@ def password_login(body: PasswordLoginRequest) -> GoogleProfile:
 
 
 @router.post("/auth/register", response_model=GoogleProfile)
-def password_register(body: RegisterRequest) -> GoogleProfile:
+async def password_register(body: RegisterRequest) -> GoogleProfile:
     """Create an account and return the same profile shape as Google Sign-In."""
     try:
-        profile = register_user(body.name, body.email, body.password)
+        profile = await run_in_threadpool(
+            register_user, body.name, body.email, body.password
+        )
     except DuplicateUserError as exc:
         raise HTTPException(status_code=409, detail=_DUPLICATE_EMAIL) from exc
     return GoogleProfile(
@@ -132,7 +135,7 @@ def password_register(body: RegisterRequest) -> GoogleProfile:
 
 
 @router.post("/auth/google", response_model=GoogleProfile)
-def google_auth(body: GoogleAuthRequest) -> GoogleProfile:
+async def google_auth(body: GoogleAuthRequest) -> GoogleProfile:
     """Verify a GIS ID token and return the user's name, email, and photo."""
     audience = load_google_client_id()
     if not audience:
@@ -141,7 +144,9 @@ def google_auth(body: GoogleAuthRequest) -> GoogleProfile:
             detail="Google sign-in is not configured.",
         )
     try:
-        claims = verify_google_id_token(body.credential, audience)
+        claims = await run_in_threadpool(
+            verify_google_id_token, body.credential, audience
+        )
         return _profile_from_claims(claims)
     except HTTPException:
         raise
