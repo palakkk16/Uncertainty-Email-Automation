@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
+from app.extraction.compose import subject_is_grounded
 from app.extraction.mentions import copied_mention, occurs_in, span_mention
 from app.schemas.chat import EmailExtraction, SlotAssessment
 
@@ -48,7 +49,7 @@ def decide(instruction: str, extraction: EmailExtraction) -> Decision:
     """Choose ASK or SEND from slot constraints. Do not send mail."""
     recipient, mention, addresses = _recipient_slot(instruction, extraction)
     subject = _text_slot(extraction.subject, instruction, must_occur=False)
-    if subject == "resolved" and not _subject_supported(extraction.subject, instruction):
+    if subject == "resolved" and not subject_is_grounded(extraction.subject, instruction):
         subject = "missing"
     body = _text_slot(extraction.body, instruction, must_occur=False)
     assessment = SlotAssessment(
@@ -134,44 +135,6 @@ def _resolved_fraction(
         body == "resolved",
     )
     return sum(resolved) / 3
-
-
-_SUBJECT_STOP = frozenset(
-    {
-        "a",
-        "about",
-        "an",
-        "and",
-        "at",
-        "email",
-        "for",
-        "in",
-        "mail",
-        "of",
-        "on",
-        "or",
-        "please",
-        "regarding",
-        "request",
-        "the",
-        "to",
-    }
-)
-
-
-def _subject_supported(value: str | None, instruction: str) -> bool:
-    """True when the titled subject is grounded in words the user wrote."""
-    if occurs_in(value, instruction):
-        return True
-    if not isinstance(value, str):
-        return False
-    folded = " ".join(instruction.split()).lower()
-    tokens = [token.strip(".,:;!?") for token in value.lower().split()]
-    content = [token for token in tokens if token not in _SUBJECT_STOP and len(token) > 2]
-    if not content:
-        return False
-    hits = sum(1 for token in content if token in folded)
-    return hits >= min(2, len(content))
 
 
 def _question(

@@ -168,7 +168,7 @@ def test_should_fall_back_to_a_listed_flash_model_when_the_configured_id_is_gone
     result = extract_email_fields(_CLEAR)
 
     assert result.recipient == "rahul@example.com"
-    assert gemini["calls"] == ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+    assert gemini["calls"] == ["gemini-2.5-flash", "gemini-2.0-flash"]
     assert gemini["list_calls"] == 1
 
 
@@ -199,7 +199,7 @@ def test_should_retry_a_503_on_the_same_model_then_succeed(
     assert gemini["list_calls"] == 0
 
 
-def test_should_fall_back_to_a_lite_flash_model_after_503_retries(
+def test_should_fall_back_to_gemini_2_0_flash_after_503_retries(
     gemini: dict[str, object],
 ) -> None:
     gemini["fail_times"] = {DEFAULT_GEMINI_MODEL: 2}
@@ -210,7 +210,7 @@ def test_should_fall_back_to_a_lite_flash_model_after_503_retries(
     assert gemini["calls"] == [
         DEFAULT_GEMINI_MODEL,
         DEFAULT_GEMINI_MODEL,
-        "gemini-2.5-flash-lite",
+        "gemini-2.0-flash",
     ]
     assert gemini["list_calls"] == 1
     assert gemini["sleeps"] == [0.5]
@@ -242,6 +242,9 @@ def test_should_use_local_regex_when_every_model_returns_503(
 ) -> None:
     gemini["fail_times"] = {
         DEFAULT_GEMINI_MODEL: 2,
+        "gemini-2.0-flash": 2,
+        "gemini-1.5-flash": 2,
+        "gemini-flash-latest": 2,
         "gemini-2.5-flash-lite": 2,
     }
 
@@ -253,24 +256,36 @@ def test_should_use_local_regex_when_every_model_returns_503(
     assert result.subject == "Lab Meeting"
     _assert_full_email(result.body, name="Rahul", needle="meeting")
     assert "falling back to local heuristic extraction" in caplog.text
-    assert gemini["calls"] == [
+    assert gemini["calls"][0:5] == [
         DEFAULT_GEMINI_MODEL,
         DEFAULT_GEMINI_MODEL,
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-flash-lite",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
     ]
+    assert "ClientError" in caplog.text
+    assert f"model={DEFAULT_GEMINI_MODEL} code=503" in caplog.text
 
 
 def test_should_use_local_regex_when_lite_fallback_returns_404(
     gemini: dict[str, object],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    gemini["fail_times"] = {DEFAULT_GEMINI_MODEL: 2}
     gemini["errors"] = {
+        DEFAULT_GEMINI_MODEL: _client_error(
+            404, "This model models/gemini-2.5-flash is no longer available."
+        ),
+        "gemini-2.0-flash": _client_error(
+            404, "This model models/gemini-2.0-flash is no longer available."
+        ),
+        "gemini-1.5-flash": _client_error(
+            404, "This model models/gemini-1.5-flash is no longer available."
+        ),
         "gemini-2.5-flash-lite": _client_error(
             404,
             "This model models/gemini-2.5-flash-lite is no longer available to new users.",
-        )
+        ),
+        "gemini-flash-latest": _client_error(404, "gone"),
     }
 
     with caplog.at_level("WARNING"):
@@ -279,10 +294,12 @@ def test_should_use_local_regex_when_lite_fallback_returns_404(
     assert isinstance(result, EmailExtraction)
     assert result.recipient == "rahul@example.com"
     assert "falling back to local heuristic extraction" in caplog.text
-    assert gemini["calls"] == [
+    assert f"model={DEFAULT_GEMINI_MODEL} code=404" in caplog.text
+    assert "model=gemini-2.0-flash code=404" in caplog.text
+    assert gemini["calls"][0:3] == [
         DEFAULT_GEMINI_MODEL,
-        DEFAULT_GEMINI_MODEL,
-        "gemini-2.5-flash-lite",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
     ]
 
 
@@ -331,6 +348,21 @@ def test_local_regex_extract_uses_for_phrase_and_followup_line_as_subject() -> N
         EmailExtraction(recipient="palakpunjabi10d7583@gmail.com"),
     )
     assert merged.subject == "Request for Leave Approval"
+
+
+def test_should_bind_a_plain_followup_reply_to_the_open_subject_slot() -> None:
+    instruction = "Send an email to palak@example.com for leave\nyour outfit"
+
+    filled = local_regex_extract(instruction)
+    merged = apply_followup_slots(
+        instruction,
+        EmailExtraction(recipient="palak@example.com", subject="Request for Leave Approval"),
+    )
+
+    assert filled.recipient == "palak@example.com"
+    assert filled.subject == "Your Outfit"
+    assert merged.subject == "Your Outfit"
+    _assert_full_email(filled.body, name="Palak", needle="outfit")
 
 
 def test_should_compose_a_professional_body_when_intent_is_clear() -> None:
@@ -422,7 +454,9 @@ def test_should_use_local_regex_when_every_model_returns_404(
     gemini["errors"] = {
         DEFAULT_GEMINI_MODEL: _client_error(
             404, "https://generativelanguage.googleapis.com?key=AIza-secret"
-        )
+        ),
+        "gemini-2.0-flash": _client_error(404, "gone"),
+        "gemini-1.5-flash": _client_error(404, "gone"),
     }
     gemini["listed"] = []
 
@@ -432,6 +466,7 @@ def test_should_use_local_regex_when_every_model_returns_404(
     assert isinstance(result, EmailExtraction)
     assert result.recipient == "rahul@example.com"
     assert "AIza-secret" not in caplog.text
+    assert f"model={DEFAULT_GEMINI_MODEL} code=404" in caplog.text
     assert "falling back to local heuristic extraction" in caplog.text
 
 
@@ -484,5 +519,5 @@ def test_pick_flash_model_prefers_lite_when_standard_flash_is_busy() -> None:
 
     assert (
         pick_flash_model(listed, failed="gemini-2.5-flash", prefer_lite=True)
-        == "gemini-2.5-flash-lite"
+        == "gemini-2.0-flash"
     )

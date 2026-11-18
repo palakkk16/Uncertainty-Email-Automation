@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from app.extraction.compose import compose_missing_body
+from app.extraction.compose import compose_missing_body, subject_is_grounded
 from app.extraction.mentions import copied_mention, span_mention
 from app.schemas.chat import EmailExtraction
 
@@ -55,24 +55,71 @@ def local_regex_extract(instruction: str) -> EmailExtraction:
 
 
 def apply_followup_slots(instruction: str, fields: EmailExtraction) -> EmailExtraction:
-    """Fill a missing subject from the latest short reply, then draft the email.
+    """Fill the open slot from the latest short reply, then draft the email.
 
-    The frontend joins turns with newlines. A reply such as "leave approval"
-    after a subject question is that last line, not a new email command, and
-    it must never be copied verbatim as the body.
+    The frontend joins turns with newlines. After "What subject should I use?",
+    a reply such as "your outfit" is that last line, not a new email command.
+    An earlier ungrounded subject guess must not hide that answer.
     """
-    subject = fields.subject or _stated_subject(instruction)
     last = _last_line(instruction)
-    if subject is None and last is not None and _is_slot_answer(last) and "@" not in last:
-        subject = last
-    if subject != fields.subject:
-        fields = EmailExtraction(
-            recipient=fields.recipient,
-            recipient_mention=fields.recipient_mention,
-            subject=subject,
-            body=fields.body,
-        )
+    recipient, mention, subject, body = _merge_last_line(
+        instruction,
+        last,
+        fields.recipient,
+        fields.recipient_mention,
+        fields.subject or _stated_subject(instruction),
+        fields.body,
+    )
+    fields = EmailExtraction(
+        recipient=recipient,
+        recipient_mention=mention,
+        subject=subject,
+        body=body,
+    )
     return compose_missing_body(instruction, fields)
+
+
+def _merge_last_line(
+    instruction: str,
+    last: str | None,
+    recipient: str | None,
+    mention: str | None,
+    subject: str | None,
+    body: str | None,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    if last is None or not _is_slot_answer(last):
+        return recipient, mention, subject, body
+    emails = _EMAIL_RE.findall(last)
+    if emails and recipient is None:
+        return emails[0], mention, subject, body
+    if "@" in last:
+        return recipient, mention, subject, body
+    prior = _without_last_line(instruction)
+    if not _keep_subject(subject, prior, body):
+        return recipient, mention, last, body
+    if body is None:
+        return recipient, mention, subject, last
+    return recipient, mention, subject, body
+
+
+def _keep_subject(
+    subject: str | None, prior: str, body: str | None
+) -> bool:
+    """Keep a subject only when the prior turn would already accept it."""
+    if not subject:
+        return False
+    preview = compose_missing_body(
+        prior,
+        EmailExtraction(recipient=None, subject=subject, body=body),
+    )
+    return subject_is_grounded(preview.subject, prior)
+
+
+def _without_last_line(instruction: str) -> str:
+    lines = [part.strip() for part in instruction.splitlines() if part.strip()]
+    if len(lines) < 2:
+        return instruction
+    return "\n".join(lines[:-1])
 
 
 def _quoted_parts(instruction: str) -> list[str]:

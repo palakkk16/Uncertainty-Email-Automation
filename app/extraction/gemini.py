@@ -56,15 +56,21 @@ _PREFERRED_FLASH = (
     "gemini-2.5-flash",
     DEFAULT_GEMINI_FALLBACK_MODEL,
     "gemini-2.0-flash",
+    "gemini-1.5-flash",
 )
 _PREFERRED_LITE = (
     DEFAULT_GEMINI_FALLBACK_MODEL,
-    "gemini-2.5-flash-lite",
     "gemini-2.0-flash",
-    "gemini-flash-lite-latest",
+    "gemini-1.5-flash",
+    "gemini-2.0-flash-lite",
 )
 _BUSY_FLASH = frozenset(
     {DEFAULT_GEMINI_MODEL, "gemini-2.5-flash", "gemini-flash-latest"}
+)
+_HARDCODED_FALLBACKS = (
+    DEFAULT_GEMINI_FALLBACK_MODEL,
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
 )
 _ATTEMPTS = 2
 _RETRY_SECONDS = 0.5
@@ -181,37 +187,54 @@ def _sleep(seconds: float) -> None:
 
 
 def _generate(client: object, model: str, instruction: str) -> str:
-    try:
-        return _call_with_retries(client, model, instruction)
-    except (ExtractionRateLimited, ExtractionError):
-        raise
-    except Exception as exc:
-        fallback = _fallback_model(client, model, exc)
-        logger.warning("Gemini model %s is unavailable; retrying with %s", model, fallback)
+    remaining = [_normalize_model_id(model)]
+    tried: set[str] = set()
+    last_exc: Exception | None = None
+    loaded_fallbacks = False
+    while remaining:
+        candidate = remaining.pop(0)
+        if candidate in tried:
+            continue
+        tried.add(candidate)
         try:
-            return _call_with_retries(client, fallback, instruction)
+            return _call_with_retries(client, candidate, instruction)
         except (ExtractionRateLimited, ExtractionError):
             raise
-        except Exception as retry_exc:
-            _raise_mapped(retry_exc, fallback)
+        except Exception as exc:
+            last_exc = exc
+            _log_failure(candidate, exc)
+            mapped = _map_exception(exc)
+            if mapped is not None:
+                raise mapped from exc
+            if not (_is_not_found(exc) or _is_retryable(exc)):
+                _raise_mapped(exc, candidate)
+            if not loaded_fallbacks:
+                loaded_fallbacks = True
+                remaining.extend(_fallback_models(client, failed=candidate))
+            logger.warning(
+                "Gemini model %s is unavailable; retrying with %s",
+                candidate,
+                remaining[0] if remaining else "local heuristic",
+            )
+    if last_exc is not None:
+        _raise_mapped(last_exc, model)
+    raise ExtractionError("model_not_found")
 
 
-def _fallback_model(client: object, model: str, exc: Exception) -> str:
-    mapped = _map_exception(exc)
-    if mapped is not None:
-        raise mapped from exc
-    if not (_is_not_found(exc) or _is_retryable(exc)):
-        _raise_mapped(exc, model)
-    fallback = pick_flash_model(
-        _list_models(client),
-        failed=model,
-        prefer_lite=_is_retryable(exc),
-    )
-    if fallback is None:
-        reason = "model_not_found" if _is_not_found(exc) else type(exc).__name__
-        _log_failure(model, exc)
-        raise ExtractionError(reason) from exc
-    return fallback
+def _fallback_models(client: object, failed: str) -> list[str]:
+    """Hardcoded working Flash ids first, then whatever models.list() still offers."""
+    skip = {_normalize_model_id(failed)}
+    ordered: list[str] = []
+    for model_id in _HARDCODED_FALLBACKS:
+        if model_id not in skip:
+            ordered.append(model_id)
+            skip.add(model_id)
+    for item in _list_models(client):
+        model_id = _usable_model_id(item, skip)
+        if model_id is not None:
+            ordered.append(model_id)
+            skip.add(model_id)
+    return ordered
 
 
 def _raise_mapped(exc: Exception, model: str) -> None:
@@ -252,6 +275,7 @@ def _gemini_client(api_key: str) -> genai.Client:
     return genai.Client(
         api_key=api_key,
         http_options=types.HttpOptions(
+            api_version="v1beta",
             timeout=GEMINI_HTTP_TIMEOUT_MS,
             retry_options=types.HttpRetryOptions(attempts=GEMINI_HTTP_RETRY_ATTEMPTS),
         ),
@@ -262,7 +286,7 @@ def _call(client: object, model: str, instruction: str) -> str:
     response = client.models.generate_content(
         model=model,
         contents=instruction,
-        config=_generation_config(),
+        config=_generation_config(model),
     )
     text = response.text
     if not isinstance(text, str) or not text.strip():
@@ -278,22 +302,25 @@ def _list_models(client: object) -> list[object]:
         return []
 
 
-def _generation_config() -> types.GenerateContentConfig:
+def _generation_config(model: str) -> types.GenerateContentConfig:
     """JSON schema only. AFC stays off so generate_content is not treated as a tool call."""
-    return types.GenerateContentConfig(
-        system_instruction=_SYSTEM,
-        temperature=0.4,
-        max_output_tokens=1024,
-        response_mime_type="application/json",
-        response_schema=EmailExtraction,
-        automatic_function_calling=types.AutomaticFunctionCallingConfig(
+    config: dict[str, object] = {
+        "system_instruction": _SYSTEM,
+        "temperature": 0.4,
+        "max_output_tokens": 1024,
+        "response_mime_type": "application/json",
+        "response_schema": EmailExtraction,
+        "automatic_function_calling": types.AutomaticFunctionCallingConfig(
             disable=True
         ),
-        thinking_config=types.ThinkingConfig(
+    }
+    model_id = _normalize_model_id(model)
+    if model_id.startswith(("gemini-2.5", "gemini-3")):
+        config["thinking_config"] = types.ThinkingConfig(
             include_thoughts=False,
             thinking_level=types.ThinkingLevel.LOW,
-        ),
-    )
+        )
+    return types.GenerateContentConfig(**config)
 
 
 def _usable_model_id(item: object, skip: set[str]) -> str | None:
@@ -393,10 +420,11 @@ def _is_not_found_failure(exc: BaseException) -> bool:
 def _log_failure(model: str, exc: BaseException) -> None:
     """Log the model id and exception type. Provider text can include the API key."""
     logger.warning(
-        "Gemini request failed: %s model=%s code=%s",
+        "Gemini request failed: %s model=%s code=%s status=%s",
         type(exc).__name__,
         model,
         getattr(exc, "code", None),
+        getattr(exc, "status", None),
     )
 
 

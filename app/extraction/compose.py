@@ -26,6 +26,17 @@ _WHEN_RE = re.compile(
     r"|\bat\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)"
 )
 _SMALL = frozenset({"a", "an", "and", "at", "for", "in", "of", "on", "or", "the", "to"})
+_SUBJECT_STOP = _SMALL | frozenset(
+    {
+        "about",
+        "email",
+        "mail",
+        "please",
+        "regarding",
+        "request",
+        "the",
+    }
+)
 _ABOUT_RE = re.compile(r"(?i)\b(?:about|regarding)\s+(.+)$")
 
 
@@ -211,16 +222,23 @@ def _about_phrase(instruction: str) -> str | None:
     return text or None
 
 
-def _grounded(value: str, instruction: str) -> bool:
+def subject_is_grounded(value: str | None, instruction: str) -> bool:
+    """True when a titled subject is grounded in words the user wrote."""
     if occurs_in(value, instruction):
         return True
+    if not isinstance(value, str):
+        return False
     folded = " ".join(instruction.split()).lower()
     tokens = [token.strip(".,:;!?") for token in value.lower().split()]
-    content = [token for token in tokens if token not in _SMALL and len(token) > 2]
+    content = [token for token in tokens if token not in _SUBJECT_STOP and len(token) > 2]
     if not content:
         return False
     hits = sum(1 for token in content if token in folded)
     return hits >= min(2, len(content))
+
+
+def _grounded(value: str, instruction: str) -> bool:
+    return subject_is_grounded(value, instruction)
 
 
 def _has_text(value: str | None) -> bool:
