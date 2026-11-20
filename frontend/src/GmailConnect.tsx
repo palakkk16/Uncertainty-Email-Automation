@@ -12,11 +12,16 @@ type GmailConnectProps = {
 };
 
 export function GmailConnect({ email }: GmailConnectProps) {
-  const [status, setStatus] = useState<GmailAccess | null>(readGmailToken);
+  const [status, setStatus] = useState<GmailAccess | null>(() =>
+    readGmailToken(email),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => subscribeGmailToken(() => setStatus(readGmailToken())), []);
+  useEffect(() => {
+    setStatus(readGmailToken(email));
+    return subscribeGmailToken(() => setStatus(readGmailToken(email)));
+  }, [email]);
 
   const connected = status !== null;
 

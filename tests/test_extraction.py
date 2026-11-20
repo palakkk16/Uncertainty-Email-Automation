@@ -6,7 +6,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from google.genai.errors import ClientError
+from google.genai.errors import ClientError, ServerError
 
 from app.config import (
     DEFAULT_GEMINI_MODEL,
@@ -15,7 +15,6 @@ from app.config import (
     Settings,
 )
 from app.extraction.gemini import (
-    ExtractionError,
     extract_email_fields,
     local_regex_extract,
     parse_extraction,
@@ -69,6 +68,7 @@ def gemini(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         "errors": {},
         "fail_times": {},
         "fail_code": 503,
+        "server_error": False,
         "list_calls": 0,
         "config": None,
         "sleeps": [],
@@ -84,6 +84,9 @@ def gemini(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             assert isinstance(remaining, dict)
             if remaining.get(model, 0) > 0:
                 remaining[model] = int(remaining[model]) - 1
+                payload = {"error": {"message": "high demand", "status": "UNAVAILABLE"}}
+                if state.get("server_error"):
+                    raise ServerError(int(state["fail_code"]), payload)
                 raise _client_error(
                     int(state["fail_code"]), "high demand", status="UNAVAILABLE"
                 )
@@ -168,22 +171,21 @@ def test_should_fall_back_to_a_listed_flash_model_when_the_configured_id_is_gone
     result = extract_email_fields(_CLEAR)
 
     assert result.recipient == "rahul@example.com"
-    assert gemini["calls"] == ["gemini-2.5-flash", "gemini-2.0-flash"]
+    assert gemini["calls"] == ["gemini-2.5-flash", "gemini-flash-latest"]
     assert gemini["list_calls"] == 1
 
 
-def test_should_fail_on_a_gemini_timeout_without_retrying(
+def test_should_try_the_next_model_on_a_gemini_timeout_without_retrying(
     gemini: dict[str, object],
 ) -> None:
     gemini["errors"] = {DEFAULT_GEMINI_MODEL: TimeoutError()}
 
-    with pytest.raises(ExtractionError) as info:
-        extract_email_fields(_CLEAR)
+    result = extract_email_fields(_CLEAR)
 
-    assert str(info.value) == "timeout"
-    assert gemini["calls"] == [DEFAULT_GEMINI_MODEL]
+    assert result.recipient == "rahul@example.com"
+    assert gemini["calls"] == [DEFAULT_GEMINI_MODEL, "gemini-flash-latest"]
     assert gemini["sleeps"] == []
-    assert gemini["list_calls"] == 0
+    assert gemini["list_calls"] == 1
 
 
 def test_should_retry_a_503_on_the_same_model_then_succeed(
@@ -199,7 +201,7 @@ def test_should_retry_a_503_on_the_same_model_then_succeed(
     assert gemini["list_calls"] == 0
 
 
-def test_should_fall_back_to_gemini_2_0_flash_after_503_retries(
+def test_should_fall_back_to_gemini_flash_latest_after_503_retries(
     gemini: dict[str, object],
 ) -> None:
     gemini["fail_times"] = {DEFAULT_GEMINI_MODEL: 2}
@@ -210,20 +212,40 @@ def test_should_fall_back_to_gemini_2_0_flash_after_503_retries(
     assert gemini["calls"] == [
         DEFAULT_GEMINI_MODEL,
         DEFAULT_GEMINI_MODEL,
-        "gemini-2.0-flash",
+        "gemini-flash-latest",
     ]
     assert gemini["list_calls"] == 1
     assert gemini["sleeps"] == [0.5]
-    assert "gemini-flash-latest" not in gemini["calls"]
 
 
-def test_should_use_local_regex_when_gemini_returns_429(
+def test_should_try_the_next_model_when_gemini_returns_429(
     gemini: dict[str, object],
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     gemini["errors"] = {
         DEFAULT_GEMINI_MODEL: _client_error(
             429, "quota", status="RESOURCE_EXHAUSTED"
+        )
+    }
+
+    result = extract_email_fields(_CLEAR)
+
+    assert result.recipient == "rahul@example.com"
+    assert gemini["calls"] == [DEFAULT_GEMINI_MODEL, "gemini-flash-latest"]
+    assert gemini["list_calls"] == 1
+
+
+def test_should_use_local_regex_when_every_model_returns_429(
+    gemini: dict[str, object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    gemini["errors"] = {
+        name: _client_error(429, "quota", status="RESOURCE_EXHAUSTED")
+        for name in (
+            DEFAULT_GEMINI_MODEL,
+            "gemini-flash-latest",
+            "gemini-2.5-flash-lite",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
         )
     }
 
@@ -233,7 +255,7 @@ def test_should_use_local_regex_when_gemini_returns_429(
     assert isinstance(result, EmailExtraction)
     assert result.recipient == "rahul@example.com"
     assert "rate limited (429)" in caplog.text
-    assert gemini["list_calls"] == 0
+    assert gemini["list_calls"] == 1
 
 
 def test_should_use_local_regex_when_every_model_returns_503(
@@ -259,9 +281,9 @@ def test_should_use_local_regex_when_every_model_returns_503(
     assert gemini["calls"][0:5] == [
         DEFAULT_GEMINI_MODEL,
         DEFAULT_GEMINI_MODEL,
-        "gemini-2.0-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
+        "gemini-flash-latest",
+        "gemini-flash-latest",
+        "gemini-2.5-flash-lite",
     ]
     assert "ClientError" in caplog.text
     assert f"model={DEFAULT_GEMINI_MODEL} code=503" in caplog.text
@@ -298,8 +320,8 @@ def test_should_use_local_regex_when_lite_fallback_returns_404(
     assert "model=gemini-2.0-flash code=404" in caplog.text
     assert gemini["calls"][0:3] == [
         DEFAULT_GEMINI_MODEL,
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
+        "gemini-flash-latest",
+        "gemini-2.5-flash-lite",
     ]
 
 
@@ -445,6 +467,54 @@ def test_should_compose_body_after_copy_only_gemini_when_intent_is_present(
     assert result.recipient == "hitu@example.com"
     assert result.subject == "Request for Leave Approval"
     _assert_full_email(result.body, name="Hitu", needle="leave")
+
+
+def test_should_use_local_regex_when_listed_flash_latest_returns_server_error_503(
+    gemini: dict[str, object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    gemini["listed"] = ["models/gemini-flash-latest"]
+    gemini["server_error"] = True
+    gemini["errors"] = {
+        DEFAULT_GEMINI_MODEL: _client_error(404, "gone"),
+        "gemini-2.0-flash": _client_error(404, "gone"),
+        "gemini-1.5-flash": _client_error(404, "gone"),
+    }
+    gemini["fail_times"] = {"gemini-flash-latest": 2}
+
+    with caplog.at_level("WARNING"):
+        result = extract_email_fields(_CLEAR)
+
+    assert isinstance(result, EmailExtraction)
+    assert result.recipient == "rahul@example.com"
+    assert "falling back to local heuristic extraction" in caplog.text
+    assert "model=gemini-flash-latest code=503" in caplog.text
+    assert "ServerError" in caplog.text
+
+
+def test_should_skip_known_404_models_on_the_next_request(
+    gemini: dict[str, object],
+) -> None:
+    gemini["errors"] = {
+        "gemini-2.5-flash": _client_error(404, "gone"),
+    }
+
+    first = extract_email_fields(_CLEAR)
+
+    assert first.recipient == "rahul@example.com"
+    assert gemini["calls"] == ["gemini-2.5-flash", "gemini-flash-latest"]
+    gemini["calls"] = []
+    gemini["list_calls"] = 0
+    gemini["errors"] = {
+        "gemini-2.5-flash": _client_error(404, "should not be called"),
+    }
+
+    second = extract_email_fields(_CLEAR)
+
+    assert second.recipient == "rahul@example.com"
+    assert gemini["calls"][0] == "gemini-flash-latest"
+    assert "gemini-2.5-flash" not in gemini["calls"]
+    assert gemini["list_calls"] == 0
 
 
 def test_should_use_local_regex_when_every_model_returns_404(

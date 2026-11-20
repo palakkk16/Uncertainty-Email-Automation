@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
-from google.genai.errors import ClientError
+from google.genai.errors import ClientError, ServerError
 
 from app.config import DEFAULT_GEMINI_MODEL, Settings
 from app.dispatch import (
@@ -258,7 +258,7 @@ def test_should_fall_back_when_the_configured_model_returns_404(
     assert response.status_code == 200
     assert response.json()["decision"] == "SEND"
     assert response.json()["extraction"]["recipient"] == "rahul@example.com"
-    assert gemini_payload["model"] == "gemini-2.0-flash"
+    assert gemini_payload["model"] == "gemini-2.5-flash-lite"
     assert gemini_payload["list_calls"] == 1
     _assert_lab_draft(response.json()["extraction"], mail.calls)
 
@@ -554,7 +554,7 @@ def test_chat_drops_an_address_the_user_did_not_write(
     assert mail.calls == []
 
 
-def test_should_return_502_when_gemini_times_out(
+def test_should_use_local_regex_when_gemini_times_out(
     gemini_payload: dict[str, object],
     mail: FakeSender,
 ) -> None:
@@ -562,13 +562,14 @@ def test_should_return_502_when_gemini_times_out(
 
     response = _post_clear(gemini_payload)
 
-    assert response.status_code == 502
-    assert response.json() == {"detail": "Gemini extraction failed."}
-    assert mail.calls == []
-    assert gemini_payload["calls"] == 1
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"] == "SEND"
+    _assert_lab_draft(body["extraction"], mail.calls)
+    assert gemini_payload["calls"] >= 1
 
 
-def test_chat_invalid_json_is_502_and_does_not_send(
+def test_chat_invalid_json_falls_back_to_local_and_sends(
     gemini_payload: dict[str, object],
     mail: FakeSender,
 ) -> None:
@@ -576,11 +577,32 @@ def test_chat_invalid_json_is_502_and_does_not_send(
 
     response = client.post("/chat", json={"message": _CLEAR})
 
-    assert response.status_code == 502
-    assert response.json() == {"detail": "Gemini extraction failed."}
-    assert response.json().get("decision") != "SEND"
-    assert mail.calls == []
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"] == "SEND"
+    _assert_lab_draft(body["extraction"], mail.calls)
     assert gemini_payload["calls"] == 1
+    _assert_gmail_not_loaded()
+
+
+def test_chat_server_error_503_falls_back_to_local(
+    gemini_payload: dict[str, object],
+    mail: FakeSender,
+) -> None:
+    gemini_payload["error"] = ServerError(
+        503,
+        {"error": {"message": "overloaded", "status": "UNAVAILABLE"}},
+    )
+    gemini_payload["listed_models"] = ["models/gemini-flash-latest"]
+
+    response = _post_clear(gemini_payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"] == "SEND"
+    _assert_lab_draft(body["extraction"], mail.calls)
+    assert "UNAVAILABLE" not in response.text
+    assert "overloaded" not in response.text
     _assert_gmail_not_loaded()
 
 
@@ -613,7 +635,7 @@ def test_chat_gemini_429_falls_back_to_local_extraction(
     _assert_gmail_not_loaded()
 
 
-def test_chat_model_error_is_502_without_secrets(
+def test_chat_model_error_falls_back_to_local_without_secrets(
     gemini_payload: dict[str, object],
     mail: FakeSender,
 ) -> None:
@@ -621,11 +643,12 @@ def test_chat_model_error_is_502_without_secrets(
 
     response = client.post("/chat", json={"message": _CLEAR})
 
-    assert response.status_code == 502
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"] == "SEND"
     assert "sk-secret" not in response.text
     assert "boom" not in response.text
-    assert response.json().get("decision") != "SEND"
-    assert mail.calls == []
+    _assert_lab_draft(body["extraction"], mail.calls)
     _assert_gmail_not_loaded()
 
 

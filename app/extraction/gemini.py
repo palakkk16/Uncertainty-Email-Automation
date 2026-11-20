@@ -2,19 +2,20 @@
 
 The client lives here so tests can replace `google.genai` without touching
 the route. This module does not decide ASK vs SEND and does not send mail.
-A retired model id is replaced once from `client.models.list()`, not guessed
-into a Pro or paid model.
+A retired model id is replaced from `client.models.list()` Flash/Pro ids,
+and the working id is cached so later calls skip known-404 models.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from collections.abc import Iterable
 
 from google import genai
-from google.genai import errors, types
+from google.genai import types
 from pydantic import ValidationError
 
 from app.config import (
@@ -75,6 +76,11 @@ _HARDCODED_FALLBACKS = (
 _ATTEMPTS = 2
 _RETRY_SECONDS = 0.5
 _RETRYABLE_CODES = frozenset({500, 502, 503})
+_RETRYABLE_STATUS_NAMES = frozenset({"UNAVAILABLE", "INTERNAL", "UNKNOWN"})
+_CACHE_LOCK = threading.Lock()
+_listed_models: tuple[str, ...] | None = None
+_working_model: str | None = None
+_unavailable: set[str] = set()
 
 
 class ExtractionError(Exception):
@@ -89,13 +95,21 @@ class ExtractionRateLimited(ExtractionError):
     """Gemini returned HTTP 429. The message is the type name, not the client text."""
 
 
+def reset_model_cache() -> None:
+    """Drop listed and working model ids. Tests isolate each case this way."""
+    global _listed_models, _working_model
+    with _CACHE_LOCK:
+        _listed_models = None
+        _working_model = None
+        _unavailable.clear()
+
+
 def extract_email_fields(instruction: str, model_name: str | None = None) -> EmailExtraction:
     """Run one free-tier Gemini call, then polish subject and body.
 
-    Persistent 404/429/500/502/503 errors fall back to local regex copy so
-    the chat route still receives EmailExtraction instead of HTTP 429 or 502.
-    A short topic is expanded into a titled subject and a complete email.
-    Recipient addresses stay copy-only.
+    Any Gemini API, parse, timeout, 404, 429, or 5xx failure falls back to
+    local regex copy so POST /chat still receives EmailExtraction. A missing
+    API key stays ExtractionUnavailable. Recipient addresses stay copy-only.
     """
     settings = load_settings()
     if not settings.gemini_api_key:
@@ -107,20 +121,8 @@ def extract_email_fields(instruction: str, model_name: str | None = None) -> Ema
         fields = parse_extraction(raw, instruction)
     except ExtractionUnavailable:
         raise
-    except (errors.APIError, ExtractionError) as exc:
-        if _is_rate_failure(exc):
-            logger.warning(
-                "Gemini API rate limited (429); falling back to local heuristic extraction"
-            )
-            return local_regex_extract(instruction)
-        if _is_not_found_failure(exc):
-            logger.warning(
-                "Gemini model not found (404); falling back to local heuristic extraction"
-            )
-            return local_regex_extract(instruction)
-        if not _is_capacity_failure(exc):
-            raise
-        logger.warning("Gemini API unavailable; falling back to local heuristic extraction")
+    except Exception as exc:
+        _log_local_fallback(exc)
         return local_regex_extract(instruction)
     copied = apply_followup_slots(instruction, fields)
     return compose_missing_body(instruction, copied)
@@ -187,54 +189,100 @@ def _sleep(seconds: float) -> None:
 
 
 def _generate(client: object, model: str, instruction: str) -> str:
-    remaining = [_normalize_model_id(model)]
+    remaining = _model_candidates(primary=model)
     tried: set[str] = set()
     last_exc: Exception | None = None
     loaded_fallbacks = False
     while remaining:
         candidate = remaining.pop(0)
-        if candidate in tried:
+        if candidate in tried or _is_unavailable(candidate):
             continue
         tried.add(candidate)
         try:
-            return _call_with_retries(client, candidate, instruction)
-        except (ExtractionRateLimited, ExtractionError):
-            raise
+            text = _call_with_retries(client, candidate, instruction)
         except Exception as exc:
             last_exc = exc
             _log_failure(candidate, exc)
-            mapped = _map_exception(exc)
-            if mapped is not None:
-                raise mapped from exc
-            if not (_is_not_found(exc) or _is_retryable(exc)):
-                _raise_mapped(exc, candidate)
+            if _is_not_found(exc) or _is_not_found_failure(exc):
+                _mark_unavailable(candidate)
             if not loaded_fallbacks:
                 loaded_fallbacks = True
-                remaining.extend(_fallback_models(client, failed=candidate))
+                remaining.extend(_fallback_candidates(client, tried))
             logger.warning(
                 "Gemini model %s is unavailable; retrying with %s",
                 candidate,
                 remaining[0] if remaining else "local heuristic",
             )
+            continue
+        _remember_working(candidate)
+        return text
+    if isinstance(last_exc, ExtractionError):
+        raise last_exc
     if last_exc is not None:
         _raise_mapped(last_exc, model)
     raise ExtractionError("model_not_found")
 
 
-def _fallback_models(client: object, failed: str) -> list[str]:
-    """Hardcoded working Flash ids first, then whatever models.list() still offers."""
-    skip = {_normalize_model_id(failed)}
+def _model_candidates(*, primary: str) -> list[str]:
+    """Working id first, then cached list, then the configured primary."""
     ordered: list[str] = []
-    for model_id in _HARDCODED_FALLBACKS:
-        if model_id not in skip:
-            ordered.append(model_id)
-            skip.add(model_id)
-    for item in _list_models(client):
-        model_id = _usable_model_id(item, skip)
-        if model_id is not None:
-            ordered.append(model_id)
-            skip.add(model_id)
+    seen: set[str] = set()
+
+    def add(model_id: str | None) -> None:
+        if not model_id:
+            return
+        mid = _normalize_model_id(model_id)
+        if not mid or mid in seen or _is_unavailable(mid):
+            return
+        seen.add(mid)
+        ordered.append(mid)
+
+    add(_peek_working())
+    listed = _peek_listed()
+    if listed is not None:
+        for model_id in _prioritize_listed(listed):
+            add(model_id)
+    add(primary)
     return ordered
+
+
+def _fallback_candidates(client: object, tried: set[str]) -> list[str]:
+    """Discover Flash/Pro ids once, prefer gemini-flash-latest, skip known 404s."""
+    ordered: list[str] = []
+    seen = set(tried)
+
+    def add(model_id: str | None) -> None:
+        if not model_id:
+            return
+        mid = _normalize_model_id(model_id)
+        if not mid or mid in seen or _is_unavailable(mid):
+            return
+        seen.add(mid)
+        ordered.append(mid)
+
+    for model_id in _prioritize_listed(_cached_listed_models(client)):
+        add(model_id)
+    for model_id in _HARDCODED_FALLBACKS:
+        add(model_id)
+    return ordered
+
+
+def _prioritize_listed(listed: Iterable[str]) -> list[str]:
+    latest: list[str] = []
+    flash: list[str] = []
+    pro: list[str] = []
+    other: list[str] = []
+    for model_id in listed:
+        lower = model_id.lower()
+        if "flash-latest" in lower:
+            latest.append(model_id)
+        elif "flash" in lower:
+            flash.append(model_id)
+        elif "pro" in lower:
+            pro.append(model_id)
+        else:
+            other.append(model_id)
+    return latest + flash + pro + other
 
 
 def _raise_mapped(exc: Exception, model: str) -> None:
@@ -302,6 +350,54 @@ def _list_models(client: object) -> list[object]:
         return []
 
 
+def _cached_listed_models(client: object) -> tuple[str, ...]:
+    global _listed_models
+    cached = _peek_listed()
+    if cached is not None:
+        return cached
+    skip: set[str] = set()
+    usable: list[str] = []
+    for item in _list_models(client):
+        model_id = _usable_model_id(item, skip)
+        if model_id is None:
+            continue
+        usable.append(model_id)
+        skip.add(model_id)
+    discovered = tuple(usable)
+    with _CACHE_LOCK:
+        _listed_models = discovered
+    return discovered
+
+
+def _peek_listed() -> tuple[str, ...] | None:
+    with _CACHE_LOCK:
+        return _listed_models
+
+
+def _peek_working() -> str | None:
+    with _CACHE_LOCK:
+        return _working_model
+
+
+def _remember_working(model_id: str) -> None:
+    global _working_model
+    with _CACHE_LOCK:
+        _working_model = model_id
+
+
+def _is_unavailable(model_id: str) -> bool:
+    with _CACHE_LOCK:
+        return model_id in _unavailable
+
+
+def _mark_unavailable(model_id: str) -> None:
+    global _working_model
+    with _CACHE_LOCK:
+        _unavailable.add(model_id)
+        if _working_model == model_id:
+            _working_model = None
+
+
 def _generation_config(model: str) -> types.GenerateContentConfig:
     """JSON schema only. AFC stays off so generate_content is not treated as a tool call."""
     config: dict[str, object] = {
@@ -331,7 +427,7 @@ def _usable_model_id(item: object, skip: set[str]) -> str | None:
     lower = model_id.lower()
     if not lower.startswith("gemini") or model_id in skip:
         return None
-    if any(part in lower for part in ("pro", "embed", "image", "tts", "robotics")):
+    if any(part in lower for part in ("embed", "image", "tts", "robotics")):
         return None
     actions = getattr(item, "supported_actions", None) or ()
     if actions:
@@ -375,16 +471,14 @@ def _is_timeout(exc: BaseException) -> bool:
 
 def _is_retryable(exc: BaseException) -> bool:
     code = getattr(exc, "code", None)
-    status = getattr(exc, "status", None)
-    return code in _RETRYABLE_CODES or status in _RETRYABLE_CODES
-
-
-def _is_capacity_failure(exc: BaseException) -> bool:
-    """True for 500/502/503, including ExtractionError wrapping those codes."""
-    if _is_retryable(exc):
+    if code in _RETRYABLE_CODES:
         return True
-    cause = exc.__cause__
-    return cause is not None and cause is not exc and _is_capacity_failure(cause)
+    status = getattr(exc, "status", None)
+    if status in _RETRYABLE_CODES:
+        return True
+    if isinstance(status, str) and status.upper() in _RETRYABLE_STATUS_NAMES:
+        return True
+    return type(exc).__name__ in {"ServerError"}
 
 
 def _is_rate_limited(exc: BaseException) -> bool:
@@ -425,6 +519,23 @@ def _log_failure(model: str, exc: BaseException) -> None:
         model,
         getattr(exc, "code", None),
         getattr(exc, "status", None),
+    )
+
+
+def _log_local_fallback(exc: BaseException) -> None:
+    if _is_rate_failure(exc):
+        logger.warning(
+            "Gemini API rate limited (429); falling back to local heuristic extraction"
+        )
+        return
+    if _is_not_found_failure(exc):
+        logger.warning(
+            "Gemini model not found (404); falling back to local heuristic extraction"
+        )
+        return
+    logger.warning(
+        "Gemini extraction failed: %s; falling back to local heuristic extraction",
+        type(exc).__name__,
     )
 
 

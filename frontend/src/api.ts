@@ -54,7 +54,7 @@ export async function postChat(message: string): Promise<ChatResponse> {
     throw new ChatRequestError("rate_limit", RATE_LIMIT);
   }
   if (response.status === 401) {
-    clearGmailToken();
+    clearGmailToken(readSession()?.email);
     throw new ChatRequestError("dispatch", "Reconnect Gmail to send from your account.");
   }
   if ([403, 502, 503].includes(response.status)) {
@@ -74,7 +74,7 @@ async function readResponse(message: string): Promise<Response> {
     "Content-Type": "application/json",
     Accept: "application/json",
   };
-  const gmailToken = activeGmailAccessToken();
+  const gmailToken = activeGmailAccessToken(readSession()?.email);
   if (gmailToken) {
     headers["X-Gmail-Token"] = gmailToken;
   }

@@ -43,6 +43,15 @@ def _block_gmail_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _reset_gemini_model_cache() -> None:
+    from app.extraction.gemini import reset_model_cache
+
+    reset_model_cache()
+    yield
+    reset_model_cache()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_password_users() -> None:
     path = Path(os.environ["APP_USERS_PATH"])
     if path.exists():

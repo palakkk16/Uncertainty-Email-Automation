@@ -27,7 +27,7 @@ from app.extraction.gemini import (
     ExtractionUnavailable,
     extract_email_fields,
 )
-from app.extraction.heuristic import apply_followup_slots
+from app.extraction.heuristic import apply_followup_slots, local_regex_extract
 from app.schemas.chat import ChatRequest, ChatResponse, DispatchResult, EmailExtraction
 
 logger = logging.getLogger(__name__)
@@ -74,18 +74,9 @@ def _extract(message: str) -> EmailExtraction:
             status_code=503,
             detail="Gemini extraction is unavailable.",
         ) from exc
-    except ExtractionRateLimited as exc:
+    except (ExtractionRateLimited, ExtractionError) as exc:
         _log_type(exc)
-        raise HTTPException(
-            status_code=429,
-            detail="Gemini rate limit.",
-        ) from exc
-    except ExtractionError as exc:
-        _log_type(exc)
-        raise HTTPException(
-            status_code=502,
-            detail="Gemini extraction failed.",
-        ) from exc
+        return local_regex_extract(message)
 
 
 def _dispatch(dispatcher: Dispatcher | None, draft: Draft) -> DispatchResult:
