@@ -8,7 +8,12 @@ from __future__ import annotations
 
 import re
 
-from app.extraction.compose import compose_missing_body, subject_is_grounded
+from app.extraction.compose import (
+    compose_missing_body,
+    is_meta_subject_instruction,
+    subject_is_grounded,
+    underlying_topic,
+)
 from app.extraction.mentions import copied_mention, span_mention
 from app.schemas.chat import EmailExtraction
 
@@ -97,6 +102,9 @@ def _merge_last_line(
         return emails[0], mention, subject, body
     if "@" in last:
         return recipient, mention, subject, body
+    if is_meta_subject_instruction(last):
+        cleaned = underlying_topic(last)
+        return recipient, mention, cleaned or subject, body
     prior = _without_last_line(instruction)
     if not _keep_subject(subject, prior, body):
         return recipient, mention, last, body
@@ -207,6 +215,10 @@ def _last_line(instruction: str) -> str | None:
 
 
 def _is_slot_answer(text: str) -> bool:
-    if not text or _COMMAND_RE.search(text) or len(text) > 200:
+    if not text or len(text) > 200:
+        return False
+    if is_meta_subject_instruction(text):
+        return True
+    if _COMMAND_RE.search(text):
         return False
     return 1 <= len(text.split()) <= 20

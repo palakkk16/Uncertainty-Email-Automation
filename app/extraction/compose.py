@@ -40,13 +40,56 @@ _SUBJECT_STOP = _SMALL | frozenset(
 )
 _ABOUT_RE = re.compile(r"(?i)\b(?:about|regarding)\s+(.+)$")
 _ASKING_RE = re.compile(r"(?i)\basking\s+(.+)$")
+_HEADACHE_RE = re.compile(r"(?i)\bheadache\b|\bmigraine\b|\bfeel better\b")
+_WELLBEING_SUBJECT = "Checking In — Hope You Feel Better"
+_META_LEAD_RE = re.compile(
+    r"(?i)^(?:please\s+)*(?:"
+    r"frame\s+it(?:\s+according\s+to\s+you)?"
+    r"|according\s+to\s+you"
+    r"|you\s+decide"
+    r"|decide\s+(?:it\s+)?yourself"
+    r"|frame\s+a\s+subject"
+    r"|suggest\s+a\s+(?:subject|title)"
+    r"|anything\s+suitable"
+    r"|write\s+it\s+yourself"
+    r"|you\s+choose"
+    r")\b[\s:,-]*"
+)
+_META_ANY_RE = re.compile(
+    r"(?i)\b(?:"
+    r"frame\s+it(?:\s+according\s+to\s+you)?"
+    r"|according\s+to\s+you"
+    r"|you\s+decide"
+    r"|decide\s+(?:it\s+)?yourself"
+    r"|frame\s+a\s+subject"
+    r"|suggest\s+a\s+(?:subject|title)"
+    r"|anything\s+suitable"
+    r"|write\s+it\s+yourself"
+    r"|you\s+choose"
+    r")\b"
+)
+_TOPIC_LEAD_RE = re.compile(
+    r"(?i)^(?:please\s+)*(?:for|about|regarding|asking(?:\s+about)?|to)\s+"
+)
+_HOLLOW_TOPIC = frozenset(
+    {"it", "this", "that", "them", "yourself", "subject", "a subject", "the subject"}
+)
+_BANNED_SUBJECT = re.compile(r"(?i)frame it|according to you|asking about")
 
 
 def compose_missing_body(instruction: str, fields: EmailExtraction) -> EmailExtraction:
     """Draft a titled subject and a full body when the user stated an intent."""
     topic = _topic(instruction, fields)
     if not _has_text(topic):
-        return fields
+        subject = fields.subject
+        if _has_text(subject) and is_meta_subject_instruction(subject):
+            subject = None
+        return EmailExtraction(
+            recipient=fields.recipient,
+            recipient_mention=fields.recipient_mention,
+            subject=subject,
+            body=_without_friend_placeholder(fields.body, fields, instruction),
+        )
     subject = _professional_subject(topic)
     body = fields.body
     if _is_fragment(body, topic):
@@ -55,33 +98,69 @@ def compose_missing_body(instruction: str, fields: EmailExtraction) -> EmailExtr
         recipient=fields.recipient,
         recipient_mention=fields.recipient_mention,
         subject=subject,
-        body=body,
+        body=_without_friend_placeholder(body, fields, instruction),
     )
 
 
+def is_meta_subject_instruction(text: str) -> bool:
+    """True when the user asked the agent to invent a subject."""
+    folded = " ".join(text.split())
+    return bool(_META_LEAD_RE.search(folded) or _META_ANY_RE.search(folded))
+
+
+def underlying_topic(text: str) -> str | None:
+    """Strip meta-instructions and leftover 'asking about' / 'for' leads."""
+    cleaned = _strip_topic_leads(_strip_meta(text))
+    if not cleaned or cleaned.lower() in _HOLLOW_TOPIC:
+        return None
+    return cleaned
+
+
 def _topic(instruction: str, fields: EmailExtraction) -> str | None:
-    if _has_text(fields.subject) and _grounded(fields.subject, instruction):
-        return _strip_for(fields.subject)
+    last = _last_nonempty_line(instruction)
+    if last and is_meta_subject_instruction(last):
+        cleaned = underlying_topic(last)
+        if cleaned:
+            return cleaned
+        return _topic_from_context(_without_last_line(instruction), fields)
+    return _topic_from_context(instruction, fields)
+
+
+def _topic_from_context(instruction: str, fields: EmailExtraction) -> str | None:
+    subject = fields.subject
+    if _has_text(subject) and is_meta_subject_instruction(subject):
+        cleaned = underlying_topic(subject)
+        if cleaned:
+            return cleaned
+        subject = None
+    if _has_text(subject) and _grounded(subject, instruction):
+        return underlying_topic(subject) or _strip_for(subject)
     about = _about_phrase(instruction)
     if about:
-        return about
+        return underlying_topic(about) or about
     asking = _asking_phrase(instruction)
     if asking:
-        return asking
-    if _has_text(fields.subject):
-        return _strip_for(fields.subject)
+        return underlying_topic(asking) or asking
+    if _has_text(subject):
+        return underlying_topic(subject) or _strip_for(subject)
     if _has_text(fields.body) and _is_fragment(fields.body, fields.body):
-        return _strip_for(fields.body)
+        return underlying_topic(fields.body) or _strip_for(fields.body)
     return None
 
 
 def _professional_subject(topic: str) -> str:
+    topic = underlying_topic(topic) or _strip_for(topic)
     kind = _kind(topic)
     titled = _normalize_clock(_title_case(_strip_for(topic)))
     if kind == "sick_leave":
         return "Request for Sick Leave Approval"
     if kind == "leave":
+        when = _when(topic, topic)
+        if when:
+            return f"Leave Request for {_title_case(when)}"
         return "Request for Leave Approval"
+    if kind == "wellbeing":
+        return _WELLBEING_SUBJECT
     if kind == "invitation":
         if "wedding" in topic.lower():
             return "Wedding Invitation"
@@ -89,21 +168,27 @@ def _professional_subject(topic: str) -> str:
     if kind == "meeting":
         return titled if "meeting" in titled.lower() else f"Meeting: {titled}"
     if kind == "project":
+        if "submission" in topic.lower():
+            return "Regarding Project Submission"
         lower = titled.lower()
-        if "update" in lower or "submission" in lower:
+        if "update" in lower:
             return titled
         return f"{titled} Update"
     if kind == "outfit":
         return titled if "wear" in titled.lower() or "outfit" in titled.lower() else "Outfit"
+    if _BANNED_SUBJECT.search(titled):
+        return _title_case(topic) if topic and not _BANNED_SUBJECT.search(topic) else titled
     return titled
 
 
 def _full_email(topic: str, fields: EmailExtraction, instruction: str) -> str:
     name = _addressee(fields, instruction)
+    greeting = f"Hi {name}," if name else "Hi,"
     when = _when(instruction, topic)
     paragraph = _paragraph(_kind(topic), topic, when)
     signer = _signer_name()
-    return f"Hi {name},\n\n{paragraph}\n\nBest regards,\n{signer}"
+    closing = f"Best regards,\n{signer}" if signer else "Best regards,"
+    return f"{greeting}\n\n{paragraph}\n\n{closing}"
 
 
 def _paragraph(kind: str, topic: str, when: str) -> str:
@@ -145,6 +230,11 @@ def _paragraph(kind: str, topic: str, when: str) -> str:
             "I wanted to ask about your outfit and what you will be wearing "
             "so I can plan accordingly. Please let me know when you have a chance."
         )
+    if kind == "wellbeing":
+        return (
+            "I wanted to check in and hope you feel better soon. "
+            "Please take care, and let me know if there is anything I can do."
+        )
     purpose = _strip_for(topic)
     return (
         f"I am writing regarding {purpose}. Please let me know if any "
@@ -165,6 +255,8 @@ def _kind(topic: str) -> str:
         return "project"
     if _OUTFIT_RE.search(topic):
         return "outfit"
+    if _HEADACHE_RE.search(topic) or _SICK_RE.search(topic):
+        return "wellbeing"
     return "general"
 
 
@@ -183,22 +275,27 @@ def _is_fragment(value: str | None, topic: str | None) -> bool:
     return not (_GREETING_RE.search(text) and _SIGNOFF_RE.search(text))
 
 
-def _addressee(fields: EmailExtraction, instruction: str) -> str:
+def _addressee(fields: EmailExtraction, instruction: str) -> str | None:
     mention = fields.recipient_mention or span_mention(instruction)
     if mention:
-        return mention.split()[0].capitalize()
+        name = mention.split()[0].capitalize()
+        return None if name.lower() == "friend" else name
     local = (fields.recipient or "").split("@", 1)[0]
     letters = re.sub(r"[^A-Za-z]", "", local)
     if 2 <= len(letters) <= 16 and letters.isalpha():
-        return letters.capitalize()
-    return "there"
+        name = letters.capitalize()
+        return None if name.lower() == "friend" else name
+    return None
 
 
-def _signer_name() -> str:
+def _signer_name() -> str | None:
     explicit = os.environ.get("APP_SIGNER_NAME", "").strip()
-    if explicit:
-        return explicit.split()[0]
-    return "Palak"
+    if not explicit:
+        return None
+    first = explicit.split()[0]
+    if first.lower() == "friend":
+        return None
+    return first
 
 
 def _when(instruction: str, topic: str) -> str:
@@ -258,6 +355,15 @@ def subject_is_grounded(value: str | None, instruction: str) -> bool:
         return True
     if not isinstance(value, str):
         return False
+    if _BANNED_SUBJECT.search(value):
+        return False
+    if value == _WELLBEING_SUBJECT and _HEADACHE_RE.search(instruction):
+        return True
+    last = _last_nonempty_line(instruction)
+    if last and is_meta_subject_instruction(last):
+        topic = underlying_topic(last)
+        if topic and _token_overlap(value, topic):
+            return True
     folded = " ".join(instruction.split()).lower()
     tokens = [token.strip(".,:;!?") for token in value.lower().split()]
     content = [token for token in tokens if token not in _SUBJECT_STOP and len(token) > 2]
@@ -267,9 +373,71 @@ def subject_is_grounded(value: str | None, instruction: str) -> bool:
     return hits >= min(2, len(content))
 
 
+def _token_overlap(subject: str, topic: str) -> bool:
+    subject_parts = {
+        token.strip(".,:;!?")
+        for token in subject.lower().split()
+        if token not in _SUBJECT_STOP and len(token) > 2
+    }
+    topic_parts = {
+        token.strip(".,:;!?")
+        for token in topic.lower().split()
+        if token not in _SUBJECT_STOP and len(token) > 2
+    }
+    return bool(subject_parts & topic_parts)
+
+
 def _grounded(value: str, instruction: str) -> bool:
     return subject_is_grounded(value, instruction)
 
 
 def _has_text(value: str | None) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _strip_meta(text: str) -> str:
+    cleaned = " ".join(text.split()).strip()
+    cleaned = _META_LEAD_RE.sub("", cleaned).strip()
+    cleaned = _META_ANY_RE.sub(" ", cleaned)
+    return " ".join(cleaned.split())
+
+
+def _strip_topic_leads(text: str) -> str:
+    cleaned = _strip_for(" ".join(text.split()))
+    while True:
+        nxt = _TOPIC_LEAD_RE.sub("", cleaned).strip(" ,:-")
+        nxt = " ".join(nxt.split())
+        if nxt == cleaned:
+            return cleaned
+        cleaned = nxt
+
+
+def _last_nonempty_line(instruction: str) -> str | None:
+    lines = [" ".join(part.split()) for part in instruction.splitlines() if part.strip()]
+    if len(lines) < 2:
+        return None
+    return lines[-1]
+
+
+def _without_last_line(instruction: str) -> str:
+    lines = [part.strip() for part in instruction.splitlines() if part.strip()]
+    if len(lines) < 2:
+        return instruction
+    return "\n".join(lines[:-1])
+
+
+def _without_friend_placeholder(
+    body: str | None, fields: EmailExtraction, instruction: str
+) -> str | None:
+    if not _has_text(body):
+        return body
+    name = _addressee(fields, instruction)
+    signer = _signer_name()
+    text = body
+    greet = f"Hi {name}," if name else "Hi,"
+    text = re.sub(r"(?i)^Hi\s+Friend\s*,", greet, text)
+    if signer:
+        text = re.sub(r"(?i)(Best regards,)\s*Friend\s*$", rf"\1\n{signer}", text)
+    else:
+        text = re.sub(r"(?i)(Best regards,)\s*Friend\s*$", r"\1", text)
+    return text

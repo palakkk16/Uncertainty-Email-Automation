@@ -294,7 +294,7 @@ def test_should_extract_outfit_leave_and_project_topics_without_gemini() -> None
         "send mail to hitu@example.com regarding leave tomorrow"
     )
     assert leave.recipient == "hitu@example.com"
-    assert leave.subject == "Request for Leave Approval"
+    assert leave.subject == "Leave Request for Tomorrow"
     _assert_full_email(leave.body, name="Hitu", needle="leave")
 
     project = local_regex_extract(
@@ -372,6 +372,59 @@ def test_local_regex_extract_uses_for_phrase_and_followup_line_as_subject() -> N
         EmailExtraction(recipient="palakpunjabi10d7583@gmail.com"),
     )
     assert merged.subject == "Request for Leave Approval"
+
+
+def test_should_strip_meta_subject_instructions_into_a_clean_title() -> None:
+    headache = local_regex_extract(
+        "send mail to hitu@example.com\n"
+        "frame it according to you for asking about their headache"
+    )
+    assert headache.subject == "Checking In — Hope You Feel Better"
+    assert "frame it" not in (headache.subject or "").lower()
+    assert "according to you" not in (headache.subject or "").lower()
+    assert "asking about" not in (headache.subject or "").lower()
+    _assert_full_email(headache.body, name="Hitu", needle="feel better")
+    assert "Friend" not in (headache.body or "")
+
+    leave = local_regex_extract(
+        "send mail to hitu@example.com\n"
+        "decide yourself about leave tomorrow"
+    )
+    assert leave.subject == "Leave Request for Tomorrow"
+    _assert_full_email(leave.body, name="Hitu", needle="leave")
+
+    project = local_regex_extract(
+        "send mail to hitu@example.com\n"
+        "suggest a subject for project submission"
+    )
+    assert project.subject == "Regarding Project Submission"
+    _assert_full_email(project.body, name="Hitu", needle="submission")
+
+    reuse = local_regex_extract(
+        "send mail to hitu@example.com for leave approval\n"
+        "frame it according to you"
+    )
+    assert reuse.subject == "Request for Leave Approval"
+    assert "frame" not in (reuse.subject or "").lower()
+    _assert_full_email(reuse.body, name="Hitu", needle="leave")
+
+    written = local_regex_extract(
+        "send mail to hitu@example.com\n"
+        "write it yourself for project submission"
+    )
+    assert written.subject == "Regarding Project Submission"
+
+
+def test_should_omit_friend_from_the_signoff_when_signer_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("APP_SIGNER_NAME", raising=False)
+    result = local_regex_extract(
+        "send mail to hitu@example.com for leave approval"
+    )
+    assert result.body is not None
+    assert "Friend" not in result.body
+    assert "Best regards," in result.body
 
 
 def test_should_bind_a_plain_followup_reply_to_the_open_subject_slot() -> None:
