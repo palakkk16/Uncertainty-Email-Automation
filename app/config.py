@@ -16,12 +16,13 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
 DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-2.0-flash"
-GEMINI_HTTP_TIMEOUT_MS = 12_000
-# SDK attempts include the original request. 1 means no extra HTTP retries;
-# the extractor still retries a 503 once at the call layer.
+GEMINI_HTTP_TIMEOUT_MS = 4_000
+# SDK attempts include the original request. 1 means no extra HTTP retries.
 GEMINI_HTTP_RETRY_ATTEMPTS = 1
+GEMINI_EXTRACT_BUDGET_S = 6.0
+GEMINI_MAX_MODELS = 2
 
 # Repo root, so `.env` is found when uvicorn is started from another cwd.
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]

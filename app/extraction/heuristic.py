@@ -17,7 +17,7 @@ _EMAIL_RE = re.compile(
 )
 _QUOTED_RE = re.compile(r'"([^"]+)"|\'([^\']+)\'')
 _TO_NAME_RE = re.compile(
-    r"(?i)\b(?:to|mail|send)\s+(?!an?\b)([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*){0,2})"
+    r"(?i)\b(?:to|mail|send)\s+(?!an?\b)([A-Za-z][A-Za-z'-]*)"
 )
 _FOR_SUBJECT_RE = re.compile(
     r"(?i)\bfor\s+(.+?)(?=\s+and\s+body\b|\s+with\s+body\b|\n|$)"
@@ -33,6 +33,9 @@ _COMMAND_RE = re.compile(
 )
 _AFTER_EMAIL_RE = re.compile(
     r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\s+(.+)$"
+)
+_INTENT_RE = re.compile(
+    r"(?i)\b(?:about|regarding|asking)\s+(.+?)(?=\s+and\s+body\b|\s+with\s+body\b|\n|$)"
 )
 
 
@@ -140,8 +143,19 @@ def _stated_subject(instruction: str) -> str | None:
     return (
         _for_subject(instruction)
         or _labeled_subject(instruction)
+        or _intent_subject(instruction)
         or _after_address_topic(instruction)
     )
+
+
+def _intent_subject(instruction: str) -> str | None:
+    match = _INTENT_RE.search(" ".join(instruction.split()))
+    if match is None:
+        return None
+    text = " ".join(match.group(1).split())
+    if not text or "@" in text or _COMMAND_RE.search(text):
+        return None
+    return text
 
 
 def _for_subject(instruction: str) -> str | None:

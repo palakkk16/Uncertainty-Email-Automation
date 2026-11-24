@@ -25,7 +25,7 @@ os.environ["APP_ALLOW_ALL_RECIPIENTS"] = "false"
 os.environ["APP_REQUIRE_USER_GMAIL_TOKEN"] = "false"
 os.environ["APP_GOOGLE_CLIENT_ID"] = "test-google-client.apps.googleusercontent.com"
 # Pin the model so a retired id in a developer's .env cannot reach the suite.
-os.environ["GEMINI_MODEL"] = "gemini-2.5-flash"
+os.environ["GEMINI_MODEL"] = "gemini-flash-latest"
 os.environ["APP_SIGNER_NAME"] = "Palak"
 os.environ["APP_USERS_PATH"] = str(
     Path(tempfile.gettempdir()) / f"uncertain-email-users-{os.getpid()}.json"

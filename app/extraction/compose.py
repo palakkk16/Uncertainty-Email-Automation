@@ -18,7 +18,8 @@ _SICK_RE = re.compile(r"(?i)\bsick\b|\bunwell\b|\bill\b")
 _LEAVE_RE = re.compile(r"(?i)\bleave\b|\bvacation\b|\btime off\b|\babsent\b")
 _INVITE_RE = re.compile(r"(?i)\binvit|\bwedding\b|\bbirthday\b|\banniversary\b")
 _MEETING_RE = re.compile(r"(?i)\bmeeting\b|\bcall\b|\bstandup\b|\bsync\b")
-_PROJECT_RE = re.compile(r"(?i)\bproject\b|\bupdate\b|\bstatus\b|\bprogress\b")
+_PROJECT_RE = re.compile(r"(?i)\bproject\b|\bupdate\b|\bstatus\b|\bprogress\b|\bsubmission\b")
+_OUTFIT_RE = re.compile(r"(?i)\bwear(?:ing)?\b|\boutfit\b")
 _WHEN_RE = re.compile(
     r"(?i)\b(?:today|tomorrow|tonight|monday|tuesday|wednesday|"
     r"thursday|friday|saturday|sunday)"
@@ -38,6 +39,7 @@ _SUBJECT_STOP = _SMALL | frozenset(
     }
 )
 _ABOUT_RE = re.compile(r"(?i)\b(?:about|regarding)\s+(.+)$")
+_ASKING_RE = re.compile(r"(?i)\basking\s+(.+)$")
 
 
 def compose_missing_body(instruction: str, fields: EmailExtraction) -> EmailExtraction:
@@ -63,6 +65,9 @@ def _topic(instruction: str, fields: EmailExtraction) -> str | None:
     about = _about_phrase(instruction)
     if about:
         return about
+    asking = _asking_phrase(instruction)
+    if asking:
+        return asking
     if _has_text(fields.subject):
         return _strip_for(fields.subject)
     if _has_text(fields.body) and _is_fragment(fields.body, fields.body):
@@ -84,7 +89,12 @@ def _professional_subject(topic: str) -> str:
     if kind == "meeting":
         return titled if "meeting" in titled.lower() else f"Meeting: {titled}"
     if kind == "project":
-        return titled if "update" in titled.lower() else f"{titled} Update"
+        lower = titled.lower()
+        if "update" in lower or "submission" in lower:
+            return titled
+        return f"{titled} Update"
+    if kind == "outfit":
+        return titled if "wear" in titled.lower() or "outfit" in titled.lower() else "Outfit"
     return titled
 
 
@@ -121,9 +131,19 @@ def _paragraph(kind: str, topic: str, when: str) -> str:
             "that time works for you, or suggest an alternative."
         )
     if kind == "project":
+        if "submission" in topic.lower():
+            return (
+                "I am writing regarding the project submission. Please let me "
+                "know if any additional details are needed."
+            )
         return (
             "I am writing to share a project update. Please let me know if you "
             "would like more detail on progress, blockers, or next steps."
+        )
+    if kind == "outfit":
+        return (
+            "I wanted to ask about your outfit and what you will be wearing "
+            "so I can plan accordingly. Please let me know when you have a chance."
         )
     purpose = _strip_for(topic)
     return (
@@ -143,6 +163,8 @@ def _kind(topic: str) -> str:
         return "meeting"
     if _PROJECT_RE.search(topic):
         return "project"
+    if _OUTFIT_RE.search(topic):
+        return "outfit"
     return "general"
 
 
@@ -216,6 +238,14 @@ def _strip_for(value: str) -> str:
 
 def _about_phrase(instruction: str) -> str | None:
     match = _ABOUT_RE.search(" ".join(instruction.split()))
+    if match is None:
+        return None
+    text = " ".join(match.group(1).split())
+    return text or None
+
+
+def _asking_phrase(instruction: str) -> str | None:
+    match = _ASKING_RE.search(" ".join(instruction.split()))
     if match is None:
         return None
     text = " ".join(match.group(1).split())

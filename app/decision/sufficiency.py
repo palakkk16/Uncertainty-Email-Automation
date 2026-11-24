@@ -147,10 +147,8 @@ def _question(
     """One question. Recipient first, then subject, then body."""
     if recipient == "ambiguous":
         return _which_address(addresses)
-    if recipient == "bare_name" and mention:
-        return f"What is {mention}'s email address?"
     if recipient != "resolved":
-        return "Which email address should I send this to?"
+        return "Who should I send this email to? Please provide their email address."
     if subject != "resolved":
         return "What subject should I use?"
     if body != "resolved":

@@ -94,7 +94,7 @@ def test_rahul_bare_name_asks_and_baseline_invents_an_address() -> None:
     assert case["instruction"] == "Email Rahul about tomorrow"
     assert decision.decision == "ASK"
     assert decision.clarification is not None
-    assert "Rahul" in decision.clarification
+    assert "email address" in decision.clarification.lower()
     assert attempt["recipient"] == "rahul@example.com"
     assert attempt["recipient"] not in str(case["instruction"])
     assert attempt["recipient"].endswith("@example.com")

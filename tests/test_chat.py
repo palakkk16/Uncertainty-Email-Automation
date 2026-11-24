@@ -228,38 +228,33 @@ def test_should_dispatch_once_with_the_draft_when_decision_is_send(
 def test_should_fall_back_when_the_configured_model_returns_404(
     gemini_payload: dict[str, object],
     mail: FakeSender,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gemini_payload["text"] = _FULL_JSON
-    gemini_payload["listed_models"] = ["models/gemini-2.5-flash-lite"]
+    gemini_payload["listed_models"] = [
+        "models/gemini-flash-lite-latest",
+        "models/gemini-3-flash-preview",
+        "models/gemini-2.5-flash-lite",
+    ]
     gemini_payload["errors"] = {
-        "gemini-2.5-flash": ClientError(
+        "gemini-flash-latest": ClientError(
             404,
             {
                 "error": {
-                    "message": "This model models/gemini-2.5-flash is no longer available.",
+                    "message": "This model models/gemini-flash-latest is no longer available.",
                     "status": "NOT_FOUND",
                 }
             },
         )
     }
-    monkeypatch.setattr(
-        "app.extraction.gemini.load_settings",
-        lambda: Settings(
-            host="127.0.0.1",
-            port=8741,
-            gemini_api_key="test-not-a-real-key",
-            gemini_model="gemini-2.5-flash",
-        ),
-    )
 
     response = client.post("/chat", json={"message": _CLEAR})
 
     assert response.status_code == 200
     assert response.json()["decision"] == "SEND"
     assert response.json()["extraction"]["recipient"] == "rahul@example.com"
-    assert gemini_payload["model"] == "gemini-2.5-flash-lite"
-    assert gemini_payload["list_calls"] == 1
+    assert gemini_payload["model"] == "gemini-2.0-flash"
+    assert gemini_payload["list_calls"] == 0
+    assert "preview" not in str(gemini_payload["model"])
     _assert_lab_draft(response.json()["extraction"], mail.calls)
 
 
@@ -521,7 +516,9 @@ def test_chat_bare_name_asks_for_that_person(
     assert body["extraction"]["recipient_mention"] == "Rahul"
     assert body["assessment"]["recipient"] == "bare_name"
     assert body["clarification"] == body["reply"]
-    assert "Rahul" in body["clarification"]
+    assert body["clarification"] == (
+        "Who should I send this email to? Please provide their email address."
+    )
     assert "@" not in body["clarification"]
     assert body["dispatch"] is None
     assert mail.calls == []
@@ -549,7 +546,9 @@ def test_chat_drops_an_address_the_user_did_not_write(
     assert body["decision"] == "ASK"
     assert body["extraction"]["recipient"] is None
     assert "rahul@example.com" not in str(body["extraction"]["recipient"])
-    assert "Rahul" in body["clarification"]
+    assert body["clarification"] == (
+        "Who should I send this email to? Please provide their email address."
+    )
     assert "@" not in body["clarification"]
     assert mail.calls == []
 

@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from app.decision import Draft, decide
+from app.extraction.heuristic import local_regex_extract
 from app.schemas.chat import EmailExtraction
 
 _CLEAR = (
@@ -125,6 +126,19 @@ def test_should_send_when_body_was_generated_and_is_not_in_the_instruction() -> 
     )
 
 
+def test_should_ask_for_an_address_when_only_a_name_is_given() -> None:
+    instruction = "send mail to palak"
+    fields = local_regex_extract(instruction)
+    result = decide(instruction, fields)
+
+    assert fields.recipient is None
+    assert fields.recipient_mention == "palak"
+    assert result.decision == "ASK"
+    assert result.clarification == (
+        "Who should I send this email to? Please provide their email address."
+    )
+
+
 def test_should_ask_for_rahul_address_when_instruction_names_him_without_email() -> None:
     result = decide(
         _RAHUL,
@@ -133,8 +147,9 @@ def test_should_ask_for_rahul_address_when_instruction_names_him_without_email()
 
     assert result.decision == "ASK"
     assert result.assessment.recipient == "bare_name"
-    assert result.clarification is not None
-    assert "Rahul" in result.clarification
+    assert result.clarification == (
+        "Who should I send this email to? Please provide their email address."
+    )
     assert "@" not in result.clarification
     assert "example.com" not in result.clarification
     assert result.assessment.resolved_fraction == 0.0
@@ -146,8 +161,9 @@ def test_should_ask_for_rahul_when_mention_was_not_copied() -> None:
 
     assert result.decision == "ASK"
     assert result.assessment.recipient == "bare_name"
-    assert result.clarification is not None
-    assert "Rahul" in result.clarification
+    assert result.clarification == (
+        "Who should I send this email to? Please provide their email address."
+    )
     assert "@" not in result.clarification
 
 
@@ -155,8 +171,9 @@ def test_should_ignore_a_mention_that_is_not_in_the_instruction() -> None:
     result = decide(_RAHUL, EmailExtraction(recipient_mention="Priya"))
 
     assert result.assessment.recipient == "bare_name"
-    assert result.clarification is not None
-    assert "Rahul" in result.clarification
+    assert result.clarification == (
+        "Who should I send this email to? Please provide their email address."
+    )
     assert "Priya" not in result.clarification
     assert "@" not in result.clarification
 
@@ -210,8 +227,9 @@ def test_should_ask_about_recipient_before_a_missing_subject() -> None:
     assert result.decision == "ASK"
     assert result.assessment.recipient == "missing"
     assert result.assessment.body == "resolved"
-    assert result.clarification is not None
-    assert "email address" in result.clarification.lower()
+    assert result.clarification == (
+        "Who should I send this email to? Please provide their email address."
+    )
     assert "subject" not in result.clarification.lower()
     assert result.assessment.resolved_fraction == pytest.approx(1 / 3)
 
