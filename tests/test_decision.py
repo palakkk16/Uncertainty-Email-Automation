@@ -59,6 +59,22 @@ def test_should_draft_only_the_bare_address_when_recipient_has_extra_text() -> N
     assert result.draft.recipient == "rahul@example.com"
 
 
+def test_should_not_repeat_the_subject_question_after_the_user_replies() -> None:
+    instruction = (
+        "send mail to palakpunjabi6@gmail.com\n"
+        "permission to go on vacation"
+    )
+    fields = local_regex_extract(instruction)
+    result = decide(instruction, fields)
+
+    assert result.decision == "SEND"
+    assert result.clarification is None
+    assert result.assessment.subject == "resolved"
+    assert result.assessment.body == "resolved"
+    assert result.draft is not None
+    assert "vacation" in result.draft.subject.lower() or "permission" in result.draft.subject.lower()
+
+
 def test_should_ask_about_subject_when_subject_is_missing() -> None:
     result = decide(
         "Send an email to rahul@example.com with body Tomorrow at 10 AM",

@@ -75,6 +75,9 @@ _HOLLOW_TOPIC = frozenset(
     {"it", "this", "that", "them", "yourself", "subject", "a subject", "the subject"}
 )
 _BANNED_SUBJECT = re.compile(r"(?i)frame it|according to you|asking about")
+_COMMAND_START_RE = re.compile(
+    r"(?i)^(send|e-?mail|mail|message|write|contact)\b"
+)
 
 
 def compose_missing_body(instruction: str, fields: EmailExtraction) -> EmailExtraction:
@@ -118,12 +121,27 @@ def underlying_topic(text: str) -> str | None:
 
 def _topic(instruction: str, fields: EmailExtraction) -> str | None:
     last = _last_nonempty_line(instruction)
-    if last and is_meta_subject_instruction(last):
-        cleaned = underlying_topic(last)
-        if cleaned:
-            return cleaned
-        return _topic_from_context(_without_last_line(instruction), fields)
+    if last:
+        follow = _followup_topic(last)
+        if follow:
+            return follow
+        if is_meta_subject_instruction(last):
+            return _topic_from_context(_without_last_line(instruction), fields)
     return _topic_from_context(instruction, fields)
+
+
+def _followup_topic(text: str) -> str | None:
+    """A short last-line reply after a clarification is the topic, not a new command."""
+    cleaned = " ".join(text.split())
+    if not cleaned or "@" in cleaned or len(cleaned) > 200:
+        return None
+    if not (1 <= len(cleaned.split()) <= 20):
+        return None
+    if is_meta_subject_instruction(cleaned):
+        return underlying_topic(cleaned)
+    if _COMMAND_START_RE.search(cleaned):
+        return None
+    return underlying_topic(cleaned) or cleaned
 
 
 def _topic_from_context(instruction: str, fields: EmailExtraction) -> str | None:
@@ -150,14 +168,20 @@ def _topic_from_context(instruction: str, fields: EmailExtraction) -> str | None
 
 def _professional_subject(topic: str) -> str:
     topic = underlying_topic(topic) or _strip_for(topic)
-    kind = _kind(topic)
     titled = _normalize_clock(_title_case(_strip_for(topic)))
+    # A longer user phrase is already a subject. Keep their words so the
+    # title stays grounded instead of swapping in a generic template.
+    if len(topic.split()) >= 4:
+        return titled
+    kind = _kind(topic)
     if kind == "sick_leave":
         return "Request for Sick Leave Approval"
     if kind == "leave":
         when = _when(topic, topic)
         if when:
             return f"Leave Request for {_title_case(when)}"
+        if "vacation" in topic.lower():
+            return "Request for Vacation Permission"
         return "Request for Leave Approval"
     if kind == "wellbeing":
         return _WELLBEING_SUBJECT
@@ -199,6 +223,11 @@ def _paragraph(kind: str, topic: str, when: str) -> str:
             "know if any additional details are needed."
         )
     if kind == "leave":
+        if "vacation" in topic.lower():
+            return (
+                "I am writing to request permission to go on vacation. "
+                "Please let me know if any additional details are needed."
+            )
         return (
             "I am writing to request approval for leave. Please let me know if "
             "any additional details are needed."
@@ -468,9 +497,11 @@ def subject_is_grounded(value: str | None, instruction: str) -> bool:
     if value == _WELLBEING_SUBJECT and _HEADACHE_RE.search(instruction):
         return True
     last = _last_nonempty_line(instruction)
-    if last and is_meta_subject_instruction(last):
-        topic = underlying_topic(last)
-        if topic and _token_overlap(value, topic):
+    if last:
+        topic = underlying_topic(last) or last
+        if _token_overlap(value, topic):
+            return True
+        if _kind(topic) != "general" and _kind(value) == _kind(topic):
             return True
     folded = " ".join(instruction.split()).lower()
     tokens = [token.strip(".,:;!?") for token in value.lower().split()]

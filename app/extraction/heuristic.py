@@ -106,11 +106,23 @@ def _merge_last_line(
         cleaned = underlying_topic(last)
         return recipient, mention, cleaned or subject, body
     prior = _without_last_line(instruction)
-    if not _keep_subject(subject, prior, body):
+    if not _keep_subject(subject, prior, body) or _subject_slot_was_open(prior):
         return recipient, mention, last, body
     if body is None:
         return recipient, mention, subject, last
     return recipient, mention, subject, body
+
+
+def _subject_slot_was_open(prior: str) -> bool:
+    """True when the previous user text still needed a subject."""
+    stated = _stated_subject(prior)
+    if not stated:
+        return True
+    preview = compose_missing_body(
+        prior,
+        EmailExtraction(recipient=None, subject=stated, body=None),
+    )
+    return not subject_is_grounded(preview.subject, prior)
 
 
 def _keep_subject(

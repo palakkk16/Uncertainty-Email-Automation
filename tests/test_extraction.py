@@ -20,6 +20,7 @@ from app.extraction.gemini import (
     parse_extraction,
     pick_flash_model,
 )
+from app.decision import decide
 from app.extraction.heuristic import apply_followup_slots, compose_missing_body
 from app.schemas.chat import EmailExtraction
 
@@ -500,6 +501,26 @@ def test_should_greet_with_a_first_name_not_a_raw_email_local_part() -> None:
     )
     assert "Hi there," in (unknown.body or "")
     assert "Hi Abcdefghijklmnop," not in (unknown.body or "")
+
+
+def test_should_fill_subject_and_body_from_a_topic_reply_without_reasking() -> None:
+    instruction = (
+        "send mail to palakpunjabi6@gmail.com\n"
+        "permission to go on vacation"
+    )
+    fields = local_regex_extract(instruction)
+    result = decide(instruction, fields)
+
+    assert fields.subject is not None
+    assert "vacation" in fields.subject.lower() or "permission" in fields.subject.lower()
+    assert "frame" not in fields.subject.lower()
+    assert fields.body is not None
+    assert fields.body.strip() != "permission to go on vacation"
+    assert "vacation" in fields.body.lower() or "leave" in fields.body.lower()
+    assert result.decision == "SEND"
+    assert result.clarification is None
+    assert result.draft is not None
+    assert result.draft.subject == fields.subject
 
 
 def test_should_bind_a_plain_followup_reply_to_the_open_subject_slot() -> None:

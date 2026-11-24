@@ -12,7 +12,8 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from app.extraction.compose import subject_is_grounded
+from app.extraction.compose import compose_missing_body, subject_is_grounded
+from app.extraction.heuristic import local_regex_extract
 from app.extraction.mentions import copied_mention, occurs_in, span_mention
 from app.schemas.chat import EmailExtraction, SlotAssessment
 
@@ -20,6 +21,11 @@ _EMAIL_RE = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9._%+\-]*@[A-Za-z0-9][A-Za-z0-9.\-]*\.[A-Za-z]{2,}"
 )
 _SEND_REPLY = "The decision is SEND. No email was sent."
+RECIPIENT_QUESTION = (
+    "Who should I send this email to? Please provide their email address."
+)
+SUBJECT_QUESTION = "What subject should I use?"
+BODY_QUESTION = "What should the body of the email say?"
 
 RecipientStatus = Literal["resolved", "missing", "bare_name", "ambiguous"]
 TextStatus = Literal["resolved", "missing"]
@@ -47,6 +53,29 @@ class Decision:
 
 def decide(instruction: str, extraction: EmailExtraction) -> Decision:
     """Choose ASK or SEND from slot constraints. Do not send mail."""
+    last_question = _inferred_last_question(instruction)
+    extraction = _absorb_same_slot_answer(instruction, extraction, last_question)
+    recipient, mention, addresses, subject, body, assessment = _assess(
+        instruction, extraction
+    )
+    question = _question(recipient, mention, addresses, subject, body)
+    if question is not None and question == last_question:
+        extraction = _fill_from_last_reply(instruction, extraction, question)
+        recipient, mention, addresses, subject, body, assessment = _assess(
+            instruction, extraction
+        )
+        question = _question(recipient, mention, addresses, subject, body)
+        if question == last_question:
+            question = None
+    if question is None:
+        draft = _draft(addresses, extraction)
+        return Decision("SEND", None, _SEND_REPLY, assessment, draft)
+    return Decision("ASK", question, question, assessment)
+
+
+def _assess(
+    instruction: str, extraction: EmailExtraction
+) -> tuple[RecipientStatus, str | None, list[str], TextStatus, TextStatus, SlotAssessment]:
     recipient, mention, addresses = _recipient_slot(instruction, extraction)
     subject = _text_slot(extraction.subject, instruction, must_occur=False)
     if subject == "resolved" and not subject_is_grounded(extraction.subject, instruction):
@@ -59,11 +88,69 @@ def decide(instruction: str, extraction: EmailExtraction) -> Decision:
         body=body,
         resolved_fraction=_resolved_fraction(recipient, subject, body),
     )
-    question = _question(recipient, mention, addresses, subject, body)
-    if question is None:
-        draft = _draft(addresses, extraction)
-        return Decision("SEND", None, _SEND_REPLY, assessment, draft)
-    return Decision("ASK", question, question, assessment)
+    return recipient, mention, addresses, subject, body, assessment
+
+
+def _inferred_last_question(instruction: str) -> str | None:
+    """What the agent asked on the previous user text, if this is a follow-up."""
+    last = _last_line(instruction)
+    if last is None:
+        return None
+    prior = _without_last_line(instruction)
+    fields = local_regex_extract(prior)
+    recipient, mention, addresses, subject, body, _assessment = _assess(prior, fields)
+    return _question(recipient, mention, addresses, subject, body)
+
+
+def _absorb_same_slot_answer(
+    instruction: str,
+    extraction: EmailExtraction,
+    last_question: str | None,
+) -> EmailExtraction:
+    if last_question is None:
+        return extraction
+    return _fill_from_last_reply(instruction, extraction, last_question)
+
+
+def _fill_from_last_reply(
+    instruction: str,
+    extraction: EmailExtraction,
+    question: str,
+) -> EmailExtraction:
+    last = _last_line(instruction)
+    if last is None:
+        return extraction
+    subject = extraction.subject
+    body = extraction.body
+    if question == SUBJECT_QUESTION:
+        subject = last
+    elif question == BODY_QUESTION:
+        body = body or last
+    else:
+        return extraction
+    return compose_missing_body(
+        instruction,
+        EmailExtraction(
+            recipient=extraction.recipient,
+            recipient_mention=extraction.recipient_mention,
+            subject=subject,
+            body=body,
+        ),
+    )
+
+
+def _last_line(instruction: str) -> str | None:
+    lines = [" ".join(part.split()) for part in instruction.splitlines() if part.strip()]
+    if len(lines) < 2:
+        return None
+    return lines[-1]
+
+
+def _without_last_line(instruction: str) -> str:
+    lines = [part.strip() for part in instruction.splitlines() if part.strip()]
+    if len(lines) < 2:
+        return instruction
+    return "\n".join(lines[:-1])
 
 
 def _draft(addresses: list[str], extraction: EmailExtraction) -> Draft:
@@ -148,11 +235,11 @@ def _question(
     if recipient == "ambiguous":
         return _which_address(addresses)
     if recipient != "resolved":
-        return "Who should I send this email to? Please provide their email address."
+        return RECIPIENT_QUESTION
     if subject != "resolved":
-        return "What subject should I use?"
+        return SUBJECT_QUESTION
     if body != "resolved":
-        return "What should the body of the email say?"
+        return BODY_QUESTION
     return None
 
 
