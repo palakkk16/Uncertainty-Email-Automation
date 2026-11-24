@@ -306,6 +306,44 @@ def test_should_extract_outfit_leave_and_project_topics_without_gemini() -> None
     _assert_full_email(project.body, name="Priya", needle="submission")
 
 
+def test_should_greet_with_a_first_name_not_the_raw_email_local_part() -> None:
+    named = local_regex_extract(
+        "send mail to palak for leave approval\n"
+        "palakpunjabi6@gmail.com"
+    )
+    assert named.recipient == "palakpunjabi6@gmail.com"
+    assert named.recipient_mention == "palak"
+    assert named.body is not None
+    assert "Hi Palak," in named.body
+    assert "Palakpunjabi" not in named.body
+
+    varsha = local_regex_extract(
+        "send mail to varshapunjabi1995@gmail.com regarding leave tomorrow"
+    )
+    assert varsha.body is not None
+    assert "Hi Varsha," in varsha.body
+    assert "Varshapunjabi" not in varsha.body
+
+    hiteshi = local_regex_extract(
+        "send mail to hiteshipunjabi03@gmail.com about project submission"
+    )
+    assert hiteshi.body is not None
+    assert "Hi Hiteshi," in hiteshi.body
+
+    dotted = local_regex_extract(
+        "send mail to jane.doe@example.com for leave approval"
+    )
+    assert dotted.body is not None
+    assert "Hi Jane," in dotted.body
+
+    long_local = local_regex_extract(
+        "send mail to abcdefghijklmnop@gmail.com for leave approval"
+    )
+    assert long_local.body is not None
+    assert "Hi there," in long_local.body
+    assert "Hi Abcdefghijklmnop," not in long_local.body
+
+
 def test_should_bind_followup_address_without_reasking_the_topic() -> None:
     instruction = (
         "send mail to palak asking what she will be wearing\n"
@@ -425,6 +463,43 @@ def test_should_omit_friend_from_the_signoff_when_signer_is_missing(
     assert result.body is not None
     assert "Friend" not in result.body
     assert "Best regards," in result.body
+
+
+def test_should_greet_with_a_first_name_not_a_raw_email_local_part() -> None:
+    prior_name = local_regex_extract(
+        "send mail to palak for leave approval\n"
+        "palakpunjabi6@gmail.com"
+    )
+    assert "Hi Palak," in (prior_name.body or "")
+    assert "Palakpunjabi" not in (prior_name.body or "")
+    assert prior_name.recipient_mention == "palak"
+
+    varsha = local_regex_extract(
+        "send mail to varshapunjabi1995@gmail.com regarding leave tomorrow"
+    )
+    assert "Hi Varsha," in (varsha.body or "")
+    assert "Varshapunjabi" not in (varsha.body or "")
+
+    hiteshi = local_regex_extract(
+        "send mail to hiteshipunjabi03@gmail.com about project submission"
+    )
+    assert "Hi Hiteshi," in (hiteshi.body or "")
+
+    dotted = local_regex_extract(
+        "send mail to jane.doe@example.com for leave approval"
+    )
+    assert "Hi Jane," in (dotted.body or "")
+
+    camel = local_regex_extract(
+        "send mail to PalakPunjabi@example.com for leave approval"
+    )
+    assert "Hi Palak," in (camel.body or "")
+
+    unknown = local_regex_extract(
+        "send mail to abcdefghijklmnop@example.com for leave approval"
+    )
+    assert "Hi there," in (unknown.body or "")
+    assert "Hi Abcdefghijklmnop," not in (unknown.body or "")
 
 
 def test_should_bind_a_plain_followup_reply_to_the_open_subject_slot() -> None:

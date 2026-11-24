@@ -22,7 +22,7 @@ _EMAIL_RE = re.compile(
 )
 _QUOTED_RE = re.compile(r'"([^"]+)"|\'([^\']+)\'')
 _TO_NAME_RE = re.compile(
-    r"(?i)\b(?:to|mail|send)\s+(?!an?\b)([A-Za-z][A-Za-z'-]*)"
+    r"(?i)\b(?:to|mail|send)\s+(?!an?\b)([A-Za-z][A-Za-z'-]*)(?![A-Za-z0-9._%+-]*@)"
 )
 _FOR_SUBJECT_RE = re.compile(
     r"(?i)\bfor\s+(.+?)(?=\s+and\s+body\b|\s+with\s+body\b|\n|$)"
@@ -50,9 +50,9 @@ def local_regex_extract(instruction: str) -> EmailExtraction:
     recipient = emails[0] if emails else None
     quoted = [" ".join((group or "").split()) for group in _quoted_parts(instruction)]
     quoted = [part for part in quoted if part]
-    mention = None
-    if recipient is None:
-        mention = copied_mention(span_mention(instruction) or _to_mention(instruction), instruction)
+    mention = copied_mention(
+        span_mention(instruction) or _to_mention(instruction), instruction
+    )
     fields = EmailExtraction(
         recipient=recipient,
         recipient_mention=mention,
@@ -144,7 +144,10 @@ def _to_mention(instruction: str) -> str | None:
     match = _TO_NAME_RE.search(instruction)
     if match is None:
         return None
-    return match.group(1)
+    name = match.group(1)
+    if re.search(rf"(?i)\b{re.escape(name)}@", instruction):
+        return None
+    return name
 
 
 def _stated_subject(instruction: str) -> str | None:

@@ -183,12 +183,11 @@ def _professional_subject(topic: str) -> str:
 
 def _full_email(topic: str, fields: EmailExtraction, instruction: str) -> str:
     name = _addressee(fields, instruction)
-    greeting = f"Hi {name}," if name else "Hi,"
     when = _when(instruction, topic)
     paragraph = _paragraph(_kind(topic), topic, when)
     signer = _signer_name()
     closing = f"Best regards,\n{signer}" if signer else "Best regards,"
-    return f"{greeting}\n\n{paragraph}\n\n{closing}"
+    return f"{_greeting(name)}\n\n{paragraph}\n\n{closing}"
 
 
 def _paragraph(kind: str, topic: str, when: str) -> str:
@@ -275,16 +274,125 @@ def _is_fragment(value: str | None, topic: str | None) -> bool:
     return not (_GREETING_RE.search(text) and _SIGNOFF_RE.search(text))
 
 
+_MAX_FIRST_NAME = 10
+_CAMEL_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])")
+_SURNAMES = frozenset(
+    {
+        "aggarwal",
+        "agrawal",
+        "arora",
+        "banerjee",
+        "bhatia",
+        "bhatt",
+        "chauhan",
+        "chatterjee",
+        "chopra",
+        "choudhary",
+        "desai",
+        "dhillon",
+        "dubey",
+        "gill",
+        "goel",
+        "goyal",
+        "gupta",
+        "iyer",
+        "jain",
+        "johnson",
+        "joshi",
+        "kapoor",
+        "kaur",
+        "khan",
+        "kohli",
+        "kumar",
+        "malhotra",
+        "mehta",
+        "menon",
+        "mishra",
+        "mukherjee",
+        "nair",
+        "nanda",
+        "pandey",
+        "patel",
+        "punjabi",
+        "reddy",
+        "saxena",
+        "shah",
+        "sharma",
+        "singh",
+        "smith",
+        "thakur",
+        "tiwari",
+        "tripathi",
+        "verma",
+        "williams",
+        "yadav",
+    }
+)
+_SURNAMES_BY_LENGTH = tuple(sorted(_SURNAMES, key=len, reverse=True))
+
+
+def _greeting(name: str | None) -> str:
+    return f"Hi {name}," if name else "Hi there,"
+
+
 def _addressee(fields: EmailExtraction, instruction: str) -> str | None:
     mention = fields.recipient_mention or span_mention(instruction)
     if mention:
-        name = mention.split()[0].capitalize()
-        return None if name.lower() == "friend" else name
+        token = mention.split()[0]
+        name = _plausible_first(token) or _first_name_from_local(token)
+        if name:
+            return name
     local = (fields.recipient or "").split("@", 1)[0]
-    letters = re.sub(r"[^A-Za-z]", "", local)
-    if 2 <= len(letters) <= 16 and letters.isalpha():
-        name = letters.capitalize()
-        return None if name.lower() == "friend" else name
+    return _first_name_from_local(local)
+
+
+def _first_name_from_local(local: str) -> str | None:
+    """Derive a short first name from jane.doe, palakpunjabi6, PalakPunjabi."""
+    tokens = _split_local_tokens(local)
+    if not tokens:
+        return None
+    first = _letters_prefix(tokens[0])
+    if len(tokens) >= 2:
+        return _plausible_first(first)
+    stripped = _strip_surname_suffix(first.lower())
+    if stripped:
+        return _plausible_first(stripped)
+    return _plausible_first(first)
+
+
+def _split_local_tokens(local: str) -> list[str]:
+    trimmed = re.sub(r"[^A-Za-z._-]+$", "", local).strip("._-")
+    if not trimmed:
+        return []
+    tokens: list[str] = []
+    for part in re.split(r"[._-]+", trimmed):
+        if not part:
+            continue
+        chunks = _CAMEL_RE.findall(part)
+        if chunks and "".join(chunks) == part:
+            tokens.extend(chunks)
+        else:
+            tokens.append(part)
+    return tokens
+
+
+def _letters_prefix(token: str) -> str:
+    match = re.match(r"[A-Za-z]+", token)
+    return match.group(0) if match else ""
+
+
+def _strip_surname_suffix(word: str) -> str | None:
+    for surname in _SURNAMES_BY_LENGTH:
+        if word.endswith(surname) and len(word) > len(surname):
+            return word[: -len(surname)]
+    return None
+
+
+def _plausible_first(name: str) -> str | None:
+    if not name or not name.isalpha() or name.lower() == "friend":
+        return None
+    if 2 <= len(name) <= _MAX_FIRST_NAME:
+        return name[:1].upper() + name[1:].lower()
     return None
 
 
@@ -434,7 +542,7 @@ def _without_friend_placeholder(
     name = _addressee(fields, instruction)
     signer = _signer_name()
     text = body
-    greet = f"Hi {name}," if name else "Hi,"
+    greet = _greeting(name)
     text = re.sub(r"(?i)^Hi\s+Friend\s*,", greet, text)
     if signer:
         text = re.sub(r"(?i)(Best regards,)\s*Friend\s*$", rf"\1\n{signer}", text)
