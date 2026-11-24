@@ -20,13 +20,79 @@ _INVITE_RE = re.compile(r"(?i)\binvit|\bwedding\b|\bbirthday\b|\banniversary\b")
 _MEETING_RE = re.compile(r"(?i)\bmeeting\b|\bcall\b|\bstandup\b|\bsync\b")
 _PROJECT_RE = re.compile(r"(?i)\bproject\b|\bupdate\b|\bstatus\b|\bprogress\b|\bsubmission\b")
 _OUTFIT_RE = re.compile(r"(?i)\bwear(?:ing)?\b|\boutfit\b")
-_WHEN_RE = re.compile(
-    r"(?i)\b(?:today|tomorrow|tonight|monday|tuesday|wednesday|"
-    r"thursday|friday|saturday|sunday)"
-    r"(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?)?"
-    r"|\bat\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)"
+_MONTH = (
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|"
+    r"nov(?:ember)?|dec(?:ember)?)"
 )
-_SMALL = frozenset({"a", "an", "and", "at", "for", "in", "of", "on", "or", "the", "to"})
+_DAY_NUM = r"(?:\d{1,2}(?:st|nd|rd|th)?)"
+_YEAR = r"(?:\d{4})"
+_CAL_DATE = (
+    rf"(?:{_DAY_NUM}\s+{_MONTH}(?:\s+{_YEAR})?"
+    rf"|{_MONTH}\s+{_DAY_NUM}(?:(?:,|\s)+{_YEAR})?)"
+)
+_NUM_DATE = r"(?:\d{1,2}[/\-.]\d{1,2}(?:[/\-.]\d{2,4})?)"
+_DATE = rf"(?:{_CAL_DATE}|{_NUM_DATE})"
+_WEEKDAY = r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
+_RELATIVE = r"(?:today|tomorrow|tonight)"
+_TIME = r"(?:\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?))"
+_SPAN = rf"(?:{_DATE}|{_WEEKDAY}|{_RELATIVE})"
+_WHEN_RE = re.compile(
+    r"(?i)(?:"
+    rf"from\s+{_SPAN}\s+to\s+{_SPAN}"
+    rf"|between\s+{_SPAN}\s+and\s+{_SPAN}"
+    rf"|{_DATE}\s+(?:to|-|–|—)\s+{_DATE}"
+    rf"|until\s+{_SPAN}"
+    rf"|for\s+\d+\s+(?:days?|weeks?|months?)"
+    rf"|(?:on\s+)?(?:{_RELATIVE}|{_WEEKDAY})(?:\s+at\s+{_TIME})?"
+    rf"|(?:on\s+)?{_DATE}(?:\s+at\s+{_TIME})?"
+    rf"|at\s+{_TIME}"
+    r")"
+)
+_MONTH_CANON = {
+    "jan": "Jan",
+    "january": "January",
+    "feb": "Feb",
+    "february": "February",
+    "mar": "Mar",
+    "march": "March",
+    "apr": "Apr",
+    "april": "April",
+    "may": "May",
+    "jun": "Jun",
+    "june": "June",
+    "jul": "Jul",
+    "july": "July",
+    "aug": "Aug",
+    "august": "August",
+    "sep": "Sep",
+    "sept": "Sept",
+    "september": "September",
+    "oct": "Oct",
+    "october": "October",
+    "nov": "Nov",
+    "november": "November",
+    "dec": "Dec",
+    "december": "December",
+}
+_SMALL = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "at",
+        "between",
+        "for",
+        "from",
+        "in",
+        "of",
+        "on",
+        "or",
+        "the",
+        "to",
+        "until",
+    }
+)
 _SUBJECT_STOP = _SMALL | frozenset(
     {
         "about",
@@ -93,7 +159,7 @@ def compose_missing_body(instruction: str, fields: EmailExtraction) -> EmailExtr
             subject=subject,
             body=_without_friend_placeholder(fields.body, fields, instruction),
         )
-    subject = _professional_subject(topic)
+    subject = _professional_subject(topic, instruction)
     body = fields.body
     if _is_fragment(body, topic):
         body = _full_email(topic, fields, instruction)
@@ -166,43 +232,76 @@ def _topic_from_context(instruction: str, fields: EmailExtraction) -> str | None
     return None
 
 
-def _professional_subject(topic: str) -> str:
+def _professional_subject(topic: str, instruction: str = "") -> str:
     topic = underlying_topic(topic) or _strip_for(topic)
     titled = _normalize_clock(_title_case(_strip_for(topic)))
+    # Date details belong on the subject only when the user put them in the
+    # topic, not when they only appear in a separate body fragment.
+    when = _when(topic, topic) or _when_from_topic_span(instruction, topic)
     # A longer user phrase is already a subject. Keep their words so the
     # title stays grounded instead of swapping in a generic template.
     if len(topic.split()) >= 4:
-        return titled
-    kind = _kind(topic)
+        return _subject_with_details(titled, when)
+    return _kind_subject(_kind(topic), topic, titled, when)
+
+
+def _kind_subject(kind: str, topic: str, titled: str, when: str) -> str:
     if kind == "sick_leave":
-        return "Request for Sick Leave Approval"
+        return _with_when("Request for Sick Leave Approval", when)
     if kind == "leave":
-        when = _when(topic, topic)
-        if when:
-            return f"Leave Request for {_title_case(when)}"
-        if "vacation" in topic.lower():
-            return "Request for Vacation Permission"
-        return "Request for Leave Approval"
+        return _leave_subject(topic, when)
     if kind == "wellbeing":
         return _WELLBEING_SUBJECT
     if kind == "invitation":
         if "wedding" in topic.lower():
-            return "Wedding Invitation"
-        return titled if "invitation" in titled.lower() else f"{titled} Invitation"
+            return _with_when("Wedding Invitation", when)
+        invite = titled if "invitation" in titled.lower() else f"{titled} Invitation"
+        return _subject_with_details(invite, when)
     if kind == "meeting":
-        return titled if "meeting" in titled.lower() else f"Meeting: {titled}"
+        meeting = titled if "meeting" in titled.lower() else f"Meeting: {titled}"
+        return _subject_with_details(meeting, when)
     if kind == "project":
         if "submission" in topic.lower():
-            return "Regarding Project Submission"
+            return _with_when("Regarding Project Submission", when)
         lower = titled.lower()
         if "update" in lower:
-            return titled
-        return f"{titled} Update"
+            return _subject_with_details(titled, when)
+        return _subject_with_details(f"{titled} Update", when)
     if kind == "outfit":
-        return titled if "wear" in titled.lower() or "outfit" in titled.lower() else "Outfit"
+        outfit = titled if "wear" in titled.lower() or "outfit" in titled.lower() else "Outfit"
+        return outfit
     if _BANNED_SUBJECT.search(titled):
         return _title_case(topic) if topic and not _BANNED_SUBJECT.search(topic) else titled
-    return titled
+    return _subject_with_details(titled, when)
+
+
+def _leave_subject(topic: str, when: str) -> str:
+    vacation = "vacation" in topic.lower()
+    if when and not _leading_prep(when):
+        label = "Vacation" if vacation else "Leave"
+        return f"{label} Request for {_title_case(when)}"
+    if vacation:
+        return _with_when("Request for Vacation Permission", when)
+    return _with_when("Request for Leave Approval", when)
+
+
+def _with_when(base: str, when: str) -> str:
+    return _subject_with_details(base, when)
+
+
+def _subject_with_details(base: str, when: str) -> str:
+    phrase = when.strip()
+    if not phrase or phrase.lower() in base.lower():
+        return base
+    if _leading_prep(phrase):
+        return f"{base} {phrase}"
+    return f"{base} for {_title_case(phrase)}"
+
+
+def _leading_prep(when: str) -> bool:
+    return when.lower().startswith(
+        ("from ", "on ", "at ", "between ", "until ", "for ", "through ")
+    )
 
 
 def _full_email(topic: str, fields: EmailExtraction, instruction: str) -> str:
@@ -215,42 +314,47 @@ def _full_email(topic: str, fields: EmailExtraction, instruction: str) -> str:
 
 
 def _paragraph(kind: str, topic: str, when: str) -> str:
-    extra = f" {when.strip()}." if when else "."
     if kind == "sick_leave":
+        lead = "I am writing to request approval for sick leave"
+        rest = " as I am currently unwell and unable to attend work or classes"
+        if not when.strip():
+            rest += " today"
         return (
-            "I am writing to request approval for sick leave as I am currently "
-            "unwell and unable to attend work or classes today. Please let me "
-            "know if any additional details are needed."
+            f"{lead}{_when_clause(lead, when)}{rest}. Please let me know if any "
+            "additional details are needed."
         )
     if kind == "leave":
         if "vacation" in topic.lower():
-            return (
-                "I am writing to request permission to go on vacation. "
-                "Please let me know if any additional details are needed."
-            )
+            lead = "I am writing to request permission to go on vacation"
+        else:
+            lead = "I am writing to request approval for leave"
         return (
-            "I am writing to request approval for leave. Please let me know if "
-            "any additional details are needed."
+            f"{lead}{_when_clause(lead, when)}. Please let me know if any "
+            "additional details are needed."
         )
     if kind == "invitation":
         occasion = _strip_for(topic)
+        lead = f"I would like to invite you to {occasion}"
         return (
-            f"I would like to invite you to {occasion}. I hope you can join, "
+            f"{lead}{_when_clause(lead, when)}. I hope you can join, "
             "and please let me know if you have any questions."
         )
     if kind == "meeting":
+        lead = "I am writing to schedule a meeting"
         return (
-            f"I am writing to schedule a meeting{extra} Please confirm whether "
+            f"{lead}{_when_clause(lead, when)}. Please confirm whether "
             "that time works for you, or suggest an alternative."
         )
     if kind == "project":
         if "submission" in topic.lower():
+            lead = "I am writing regarding the project submission"
             return (
-                "I am writing regarding the project submission. Please let me "
-                "know if any additional details are needed."
+                f"{lead}{_when_clause(lead, when)}. Please let me know if any "
+                "additional details are needed."
             )
+        lead = "I am writing to share a project update"
         return (
-            "I am writing to share a project update. Please let me know if you "
+            f"{lead}{_when_clause(lead, when)}. Please let me know if you "
             "would like more detail on progress, blockers, or next steps."
         )
     if kind == "outfit":
@@ -264,10 +368,18 @@ def _paragraph(kind: str, topic: str, when: str) -> str:
             "Please take care, and let me know if there is anything I can do."
         )
     purpose = _strip_for(topic)
+    lead = f"I am writing regarding {purpose}"
     return (
-        f"I am writing regarding {purpose}. Please let me know if any "
+        f"{lead}{_when_clause(lead, when)}. Please let me know if any "
         "additional details are needed."
     )
+
+
+def _when_clause(already: str, when: str) -> str:
+    phrase = when.strip().rstrip(".")
+    if not phrase or phrase.lower() in already.lower():
+        return ""
+    return f" {phrase}"
 
 
 def _kind(topic: str) -> str:
@@ -437,21 +549,60 @@ def _signer_name() -> str | None:
 
 def _when(instruction: str, topic: str) -> str:
     blob = f"{topic} {instruction}"
-    match = _WHEN_RE.search(blob)
-    if match is None:
+    matches = list(_WHEN_RE.finditer(blob))
+    if not matches:
         return ""
-    return _normalize_clock(" ".join(match.group(0).split()))
+    best = max(matches, key=lambda item: len(item.group(0).strip()))
+    return _format_when(best.group(0))
+
+
+def _when_from_topic_span(instruction: str, topic: str) -> str:
+    """Dates that sit next to the topic in the instruction, not in a body clause."""
+    if not topic:
+        return ""
+    folded = " ".join(instruction.split())
+    match = re.search(rf"(?i)\b{re.escape(topic)}\b(.+)$", folded)
+    if match is None:
+        return _when(topic, topic)
+    tail = match.group(1)
+    if re.search(r"(?i)\b(?:and\s+)?body\b", tail):
+        tail = re.split(r"(?i)\b(?:and\s+)?body\b", tail, maxsplit=1)[0]
+    return _when(tail, topic)
+
+
+def _format_when(text: str) -> str:
+    phrase = _normalize_clock(" ".join(text.split())).rstrip(".,;:")
+    phrase = re.sub(rf"(?i)\b{_MONTH}\b", _canon_month, phrase)
+    phrase = re.sub(rf"(?i)\b{_WEEKDAY}\b", _canon_weekday, phrase)
+    phrase = re.sub(rf"(?i)\b{_RELATIVE}\b", lambda match: match.group(0).lower(), phrase)
+    phrase = re.sub(
+        r"(?i)\b(from|to|on|at|between|and|until|for)\b",
+        lambda match: match.group(0).lower(),
+        phrase,
+    )
+    return phrase
+
+
+def _canon_month(match: re.Match[str]) -> str:
+    return _MONTH_CANON.get(match.group(0).lower(), match.group(0))
+
+
+def _canon_weekday(match: re.Match[str]) -> str:
+    word = match.group(0)
+    return word[:1].upper() + word[1:].lower()
 
 
 def _title_case(phrase: str) -> str:
     words = phrase.split()
     titled: list[str] = []
     for index, word in enumerate(words):
-        lower = word.lower()
-        if index > 0 and lower in _SMALL:
-            titled.append(lower)
+        lower = word.lower().replace(".", "")
+        if lower in {"am", "pm"}:
+            titled.append(lower.upper())
+        elif index > 0 and word.lower() in _SMALL:
+            titled.append(word.lower())
         else:
-            titled.append(lower[:1].upper() + lower[1:] if lower else word)
+            titled.append(word[:1].upper() + word[1:].lower() if word else word)
     return " ".join(titled)
 
 

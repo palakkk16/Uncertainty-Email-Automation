@@ -297,6 +297,7 @@ def test_should_extract_outfit_leave_and_project_topics_without_gemini() -> None
     assert leave.recipient == "hitu@example.com"
     assert leave.subject == "Leave Request for Tomorrow"
     _assert_full_email(leave.body, name="Hitu", needle="leave")
+    assert "tomorrow" in (leave.body or "").lower()
 
     project = local_regex_extract(
         "email priya@example.com about project submission"
@@ -544,6 +545,41 @@ def test_should_compose_a_professional_body_when_intent_is_clear() -> None:
     assert result.recipient == "hitu@example.com"
     assert result.subject == "Request for Leave Approval"
     _assert_full_email(result.body, name="Hitu", needle="leave")
+
+
+def test_should_keep_dates_and_times_in_heuristic_subject_and_body() -> None:
+    leave = local_regex_extract(
+        "send mail to palakpunjabi6@gmail.com regarding leave approval "
+        "from 5 dec to 8 dec"
+    )
+    assert leave.subject is not None
+    assert leave.subject != "Request for Leave Approval"
+    assert "5" in leave.subject and "8" in leave.subject
+    assert "dec" in leave.subject.lower()
+    _assert_full_email(leave.body, name="Palak", needle="leave")
+    folded = (leave.body or "").lower()
+    assert "from 5 dec to 8 dec" in folded
+    assert folded != (
+        "i am writing to request approval for leave. please let me know if "
+        "any additional details are needed."
+    )
+
+    meeting = local_regex_extract(
+        "send mail to hitu@example.com for meeting tomorrow at 3 pm"
+    )
+    assert meeting.subject is not None
+    assert "tomorrow" in meeting.subject.lower()
+    assert "3" in meeting.subject
+    _assert_full_email(meeting.body, name="Hitu", needle="meeting")
+    assert "tomorrow" in (meeting.body or "").lower()
+    assert "3 PM" in (meeting.body or "") or "3 pm" in (meeting.body or "").lower()
+
+    monday = local_regex_extract(
+        "send mail to hitu@example.com regarding leave on Monday"
+    )
+    assert "monday" in (monday.subject or "").lower()
+    _assert_full_email(monday.body, name="Hitu", needle="leave")
+    assert "monday" in (monday.body or "").lower()
 
 
 def test_should_draft_sick_leave_invitation_and_meeting_templates() -> None:
