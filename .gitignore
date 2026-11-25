@@ -16,6 +16,10 @@ client_secret*.json
 data/users.json
 data/users.tmp
 
+# Report generator vendor (python-docx / matplotlib)
+docs/report_vendor/
+docs/report_assets/mplconfig/
+
 # Frontend
 frontend/node_modules/
 frontend/dist/
